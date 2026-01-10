@@ -2,12 +2,15 @@ let draggedElement = null;
 let draggedBookmark = null;
 let collapsedFolders = new Set();
 let openTabUrls = new Set();
+let openTabsMap = new Map();
+let pendingFolderId = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
   await loadOpenTabs();
   await loadBookmarks();
   setupEventListeners();
   setupTabListeners();
+  setupModalListeners();
 });
 
 function setupEventListeners() {
@@ -20,8 +23,62 @@ function setupEventListeners() {
   });
 }
 
+function setupModalListeners() {
+  document.getElementById('closeRecursive').addEventListener('click', async () => {
+    console.log('Close recursive clicked, pendingFolderId:', pendingFolderId);
+    closeModal();
+    if (pendingFolderId) {
+      await closeFolderTabs(pendingFolderId, true);
+      pendingFolderId = null;
+    }
+  });
+  
+  document.getElementById('closeLevel').addEventListener('click', async () => {
+    console.log('Close level clicked, pendingFolderId:', pendingFolderId);
+    closeModal();
+    if (pendingFolderId) {
+      await closeFolderTabs(pendingFolderId, false);
+      pendingFolderId = null;
+    }
+  });
+  
+  document.getElementById('closeCancel').addEventListener('click', () => {
+    closeModal();
+    pendingFolderId = null;
+  });
+  
+  document.getElementById('closeModal').addEventListener('click', (e) => {
+    if (e.target.id === 'closeModal') {
+      closeModal();
+      pendingFolderId = null;
+    }
+  });
+}
+
+function showModal(folderTitle) {
+  console.log('showModal called for:', folderTitle);
+  const modal = document.getElementById('closeModal');
+  console.log('Modal element:', modal);
+  const message = document.getElementById('modalMessage');
+  console.log('Message element:', message);
+  
+  message.textContent = `Close all open tabs in "${folderTitle}"?`;
+  modal.style.display = 'flex';
+  
+  console.log('Modal display set to:', modal.style.display);
+}
+//mqm
+// function showModal(folderTitle) {
+//   document.getElementById('modalMessage').textContent = 
+//     `Close all open tabs in "${folderTitle}"?`;
+//   document.getElementById('closeModal').style.display = 'flex';
+// }
+
+function closeModal() {
+  document.getElementById('closeModal').style.display = 'none';
+}
+
 function setupTabListeners() {
-  // Update dots when tabs are created, updated, or closed
   chrome.tabs.onCreated.addListener(async () => {
     await loadOpenTabs();
     await loadBookmarks();
@@ -40,21 +97,29 @@ function setupTabListeners() {
 
 async function loadOpenTabs() {
   const tabs = await chrome.tabs.query({});
-  openTabUrls = new Set(tabs.map(tab => normalizeUrl(tab.url)));
+  openTabUrls = new Set();
+  openTabsMap = new Map();
+  
+  tabs.forEach(tab => {
+    const normalized = normalizeUrl(tab.url);
+    openTabUrls.add(normalized);
+    if (!openTabsMap.has(normalized)) {
+      openTabsMap.set(normalized, []);
+    }
+    openTabsMap.get(normalized).push(tab.id);
+  });
+  
   console.log('Open tabs loaded:', openTabUrls.size);
+  console.log('Tab map:', Array.from(openTabsMap.entries()));
 }
 
 function normalizeUrl(url) {
   if (!url) return '';
   try {
     let normalized = url.toLowerCase();
-    // Remove protocol entirely (http:// or https://)
     normalized = normalized.replace(/^https?:\/\//, '');
-    // Remove www. prefix
     normalized = normalized.replace(/^www\./, '');
-    // Remove trailing slash
     normalized = normalized.replace(/\/$/, '');
-    // Remove common tracking parameters
     normalized = normalized.split('?')[0].split('#')[0];
     return normalized;
   } catch (e) {
@@ -66,10 +131,8 @@ function urlMatches(bookmarkUrl, openUrls) {
   if (!bookmarkUrl) return false;
   const normalized = normalizeUrl(bookmarkUrl);
   
-  // Direct match
   if (openUrls.has(normalized)) return true;
   
-  // Check if any open URL starts with the bookmark URL or vice versa
   for (let openUrl of openUrls) {
     if (openUrl.startsWith(normalized) || normalized.startsWith(openUrl)) {
       return true;
@@ -77,6 +140,101 @@ function urlMatches(bookmarkUrl, openUrls) {
   }
   
   return false;
+}
+
+function getMatchingTabIds(bookmarkUrl) {
+  const normalized = normalizeUrl(bookmarkUrl);
+  console.log('Looking for tabs matching:', bookmarkUrl, '-> normalized:', normalized);
+  
+  if (openTabsMap.has(normalized)) {
+    console.log('  Direct match found:', openTabsMap.get(normalized));
+    return openTabsMap.get(normalized);
+  }
+  
+  const tabIds = [];
+  for (let [openUrl, ids] of openTabsMap.entries()) {
+    if (openUrl.startsWith(normalized) || normalized.startsWith(openUrl)) {
+      console.log('  Fuzzy match found:', openUrl, ids);
+      tabIds.push(...ids);
+    }
+  }
+  return tabIds;
+}
+
+async function closeBookmarkTab(bookmarkUrl) {
+  console.log('Closing bookmark tab:', bookmarkUrl);
+  const tabIds = getMatchingTabIds(bookmarkUrl);
+  console.log('Tab IDs to close:', tabIds);
+  if (tabIds.length > 0) {
+    await chrome.tabs.remove(tabIds);
+    await loadOpenTabs();
+    await loadBookmarks();
+  }
+}
+
+async function closeFolderTabs(folderId, recursive) {
+  console.log('=== closeFolderTabs called ===');
+  console.log('Folder ID:', folderId, 'Recursive:', recursive);
+  
+  try {
+    const bookmark = await chrome.bookmarks.getSubTree(folderId);
+    console.log('Got subtree:', bookmark);
+    
+    const urls = collectBookmarkUrls(bookmark[0], recursive, 0);
+    console.log('Collected URLs:', urls);
+    
+    const tabIds = [];
+    for (let url of urls) {
+      const ids = getMatchingTabIds(url);
+      tabIds.push(...ids);
+    }
+    
+    console.log('Total tab IDs to close:', tabIds);
+    
+    if (tabIds.length > 0) {
+      await chrome.tabs.remove(tabIds);
+      console.log('Tabs closed successfully');
+      await loadOpenTabs();
+      await loadBookmarks();
+    } else {
+      console.log('No matching tabs found');
+      alert('No open tabs found for this folder');
+    }
+  } catch (error) {
+    console.error('Error closing folder tabs:', error);
+    alert('Error: ' + error.message);
+  }
+}
+
+function collectBookmarkUrls(bookmark, recursive, depth) {
+  console.log('collectBookmarkUrls:', bookmark.title, 'depth:', depth, 'recursive:', recursive);
+  let urls = [];
+  
+  if (!bookmark.children) {
+    return urls;
+  }
+  
+  for (let child of bookmark.children) {
+    if (child.url) {
+      if (depth === 0 || recursive) {
+        console.log('  Adding URL:', child.url);
+        urls.push(child.url);
+      }
+    } else if (child.children) {
+      if (recursive) {
+        urls.push(...collectBookmarkUrls(child, recursive, depth + 1));
+      } else if (depth === 0) {
+        for (let grandchild of child.children) {
+          if (grandchild.url) {
+            console.log('  Adding URL from subfolder:', grandchild.url);
+            urls.push(grandchild.url);
+          }
+        }
+      }
+    }
+  }
+  
+  return urls;
 }
 
 async function loadBookmarks() {
@@ -109,12 +267,10 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   div.dataset.index = bookmark.index;
   div.draggable = true;
   
-  // Hide if parent is collapsed
   if (shouldHide) {
     div.style.display = 'none';
   }
   
-  // Double-click to open bookmarks
   if (!bookmark.children && bookmark.url) {
     div.addEventListener('dblclick', (e) => {
       e.stopPropagation();
@@ -126,20 +282,19 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   content.className = 'bookmark-content';
   content.style.paddingLeft = `${16 + (level * 26)}px`;
 
-  // Orange dot if tab is open - MOVED TO LEFT
-  if (!bookmark.children && bookmark.url && urlMatches(bookmark.url, openTabUrls)) {
+  const isOpen = !bookmark.children && bookmark.url && urlMatches(bookmark.url, openTabUrls);
+  
+  if (isOpen) {
     const dot = document.createElement('span');
     dot.className = 'open-indicator';
     dot.title = 'Tab is open';
     content.appendChild(dot);
   } else if (!bookmark.children) {
-    // Empty spacer to keep alignment
     const spacer = document.createElement('span');
     spacer.className = 'open-indicator-spacer';
     content.appendChild(spacer);
   }
 
-  // Expand/collapse arrow for folders
   if (bookmark.children) {
     const arrow = document.createElement('span');
     arrow.className = 'expand-arrow';
@@ -173,6 +328,17 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   actions.className = 'actions';
 
   if (!bookmark.children) {
+    if (isOpen) {
+      const closeTabBtn = document.createElement('button');
+      closeTabBtn.innerHTML = '🚪';
+      closeTabBtn.title = 'Close Tab';
+      closeTabBtn.onclick = async (e) => {
+        e.stopPropagation();
+        await closeBookmarkTab(bookmark.url);
+      };
+      actions.appendChild(closeTabBtn);
+    }
+    
     const openBtn = document.createElement('button');
     openBtn.textContent = '↗';
     openBtn.title = 'Open';
@@ -181,6 +347,17 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
       chrome.tabs.create({ url: bookmark.url });
     };
     actions.appendChild(openBtn);
+  } else {
+    const closeFolderBtn = document.createElement('button');
+    closeFolderBtn.innerHTML = '🚪';
+    closeFolderBtn.title = 'Close Tabs';
+    closeFolderBtn.onclick = (e) => {
+      e.stopPropagation();
+      console.log('Folder close button clicked for:', bookmark.title, bookmark.id);
+      pendingFolderId = bookmark.id;
+      showModal(bookmark.title);
+    };
+    actions.appendChild(closeFolderBtn);
   }
 
   const deleteBtn = document.createElement('button');

@@ -18,6 +18,20 @@
       <div id="bookmarkTree" class="bookmark-tree"></div>
     </div>
   </div>
+  
+  <!-- Custom confirmation modal -->
+  <div id="closeModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">Close Tabs</div>
+      <div class="modal-body" id="modalMessage"></div>
+      <div class="modal-buttons">
+        <button id="closeRecursive" class="modal-btn">Close All (Including Subfolders)</button>
+        <button id="closeLevel" class="modal-btn">Close This Folder Only</button>
+        <button id="closeCancel" class="modal-btn cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+  
   <script src="bookmarks.js"></script>
 </body>
 </html>
