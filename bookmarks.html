@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Slick Bookmarks Editor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bookmarks Manager</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -10,7 +11,7 @@
     <div class="header">
       <h1>📚 Bookmarks Manager</h1>
       <div class="header-actions">
-        <input type="text" id="searchInput" placeholder="Search bookmarks...">
+        <input type="text" id="searchInput" placeholder="Search bookmarks..." autocomplete="off">
         <button id="refreshBtn" title="Refresh">↻</button>
       </div>
     </div>
@@ -19,7 +20,7 @@
     </div>
   </div>
   
-  <!-- Custom confirmation modal -->
+  <!-- Modal for closing tabs -->
   <div id="closeModal" class="modal">
     <div class="modal-content">
       <div class="modal-header">Close Tabs</div>
@@ -28,6 +29,19 @@
         <button id="closeRecursive" class="modal-btn">Close All (Including Subfolders)</button>
         <button id="closeLevel" class="modal-btn">Close This Folder Only</button>
         <button id="closeCancel" class="modal-btn cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Modal for opening bookmarks -->
+  <div id="openModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">Open Bookmarks</div>
+      <div class="modal-body" id="openModalMessage"></div>
+      <div class="modal-buttons">
+        <button id="openRecursive" class="modal-btn">Open All (Including Subfolders)</button>
+        <button id="openLevel" class="modal-btn">Open This Folder Only</button>
+        <button id="openCancel" class="modal-btn cancel">Cancel</button>
       </div>
     </div>
   </div>
