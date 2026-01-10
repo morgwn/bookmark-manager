@@ -559,9 +559,17 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   }
 
   // Icon and title
-  const icon = document.createElement('span');
-  icon.className = 'icon';
-  icon.textContent = bookmark.children ? '📁' : '🔖';
+  let icon;
+  if (bookmark.children) {
+    icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.textContent = '📁';
+  } else {
+    icon = document.createElement('img');
+    icon.className = 'icon favicon';
+    icon.src = `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(bookmark.url)}&size=16`;
+    icon.alt = '';
+  }
 
   const title = document.createElement('span');
   title.className = 'title';

@@ -5,7 +5,8 @@
   "description": "A modern bookmark manager with drag and drop support",
   "permissions": [
     "bookmarks",
-    "tabs"
+    "tabs",
+    "favicon"
   ],
   "action": {
     // "default_icon": {
