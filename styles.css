@@ -81,6 +81,30 @@ body {
   transform: rotate(180deg);
 }
 
+#starFilterBtn {
+  background: transparent;
+  border: 1px solid #3a3f4b;
+  color: #8b8d94;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+#starFilterBtn:hover {
+  background: #353a45;
+  color: #ffc107;
+  border-color: #ffc107;
+}
+
+#starFilterBtn.active {
+  background: rgba(255, 193, 7, 0.15);
+  color: #ffc107;
+  border-color: #ffc107;
+}
+
 /* Main content */
 .main-content {
   flex: 1;
@@ -106,6 +130,15 @@ body {
 .bookmark-folder:hover,
 .bookmark-item:hover {
   background: #23272f;
+}
+
+/* Dimmed context items in filter mode */
+.filter-context {
+  opacity: 0.5;
+}
+
+.filter-context:hover {
+  opacity: 0.7;
 }
 
 .bookmark-content {

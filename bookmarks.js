@@ -8,50 +8,63 @@ let openTabsMap = new Map();
 let pendingFolderId = null;
 let pendingOpenFolderId = null;
 
-// Metadata helpers for bookmark titles
-// Format: "Title {*}" or "Title {*,pin,etc}" with space before brace
-function parseBookmarkTitle(title) {
-  if (!title) return { displayTitle: 'Untitled', metadata: { starred: false, _flags: [] } };
+//------------------------------------------
+// Filter Integration (uses FilterSystem from filters.js)
+//------------------------------------------
 
-  const match = title.match(/^(.*?) \{([^}]*)\}$/);
-  if (!match) {
-    return { displayTitle: title, metadata: { starred: false, _flags: [] } };
-  }
-
-  const displayTitle = match[1] || 'Untitled';
-  const flags = match[2].split(',').map(f => f.trim()).filter(f => f);
-
-  return {
-    displayTitle,
-    metadata: {
-      starred: flags.includes('*'),
-      _flags: flags
-    }
-  };
+function toggleStarFilter() {
+  const isActive = FilterSystem.toggleStarredOnly();
+  const btn = document.getElementById('starFilterBtn');
+  btn.classList.toggle('active', isActive);
+  btn.textContent = isActive ? '★' : '☆';
+  applyCurrentFilters();
 }
 
-function buildTitleWithMetadata(displayTitle, metadata) {
-  const flags = [...(metadata._flags || [])];
-
-  // Update starred flag
-  const starIndex = flags.indexOf('*');
-  if (metadata.starred && starIndex === -1) {
-    flags.unshift('*');
-  } else if (!metadata.starred && starIndex !== -1) {
-    flags.splice(starIndex, 1);
+function applyCurrentFilters() {
+  if (!FilterSystem.isActive()) {
+    loadBookmarks();
+    return;
   }
 
-  if (flags.length === 0) return displayTitle;
-  return `${displayTitle} {${flags.join(',')}}`;
+  const query = FilterSystem.config.searchQuery;
+
+  chrome.bookmarks.getTree((tree) => {
+    const bookmarks = tree[0].children;
+
+    if (query.trim()) {
+      chrome.bookmarks.search(query, (results) => {
+        const matchingIds = new Set(results.map(r => r.id));
+        const filtered = FilterSystem.apply(bookmarks, matchingIds);
+
+        if (filtered.length === 0) {
+          document.getElementById('bookmarkTree').innerHTML =
+            '<div class="no-results">No bookmarks found</div>';
+          return;
+        }
+
+        renderBookmarks(filtered);
+      });
+    } else {
+      const filtered = FilterSystem.apply(bookmarks);
+
+      if (filtered.length === 0) {
+        document.getElementById('bookmarkTree').innerHTML =
+          '<div class="no-results">No starred bookmarks</div>';
+        return;
+      }
+
+      renderBookmarks(filtered);
+    }
+  });
 }
 
 async function toggleStarred(bookmarkId, currentTitle) {
-  const parsed = parseBookmarkTitle(currentTitle);
+  const parsed = FilterSystem.parseTitle(currentTitle);
   parsed.metadata.starred = !parsed.metadata.starred;
-  const newTitle = buildTitleWithMetadata(parsed.displayTitle, parsed.metadata);
+  const newTitle = FilterSystem.buildTitle(parsed.displayTitle, parsed.metadata);
 
   await chrome.bookmarks.update(bookmarkId, { title: newTitle });
-  await loadBookmarks();
+  applyCurrentFilters();
 }
 
 //------------------------
@@ -89,11 +102,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 function setupEventListeners() {
   document.getElementById('refreshBtn').addEventListener('click', async () => {
     await loadOpenTabs();
+    FilterSystem.reset();
+    const starBtn = document.getElementById('starFilterBtn');
+    starBtn.classList.remove('active');
+    starBtn.textContent = '☆';
+    document.getElementById('searchInput').value = '';
     await loadBookmarks();
   });
-  
+
+  document.getElementById('starFilterBtn').addEventListener('click', toggleStarFilter);
+
   document.getElementById('searchInput').addEventListener('input', (e) => {
-    filterBookmarks(e.target.value);
+    FilterSystem.setSearchQuery(e.target.value);
+    applyCurrentFilters();
   });
 }
 
@@ -166,11 +187,11 @@ function setupTabListeners() {
     if (reloadTimeout) {
       clearTimeout(reloadTimeout);
     }
-      
+
     // Schedule new reload for 300ms from now
     reloadTimeout = setTimeout(async () => {
       await loadOpenTabs();
-      await loadBookmarks();
+      applyCurrentFilters();
       reloadTimeout = null;
     }, 300);
   };
@@ -310,7 +331,7 @@ async function closeBookmarkTab(bookmarkUrl) {
       console.log('Tab already closed:', error.message);
     }
     await loadOpenTabs();
-    await loadBookmarks();
+    applyCurrentFilters();
   }
 }
 
@@ -333,7 +354,7 @@ async function closeFolderTabs(folderId, recursive) {
         console.log('Some tabs already closed:', error.message);
       }
       await loadOpenTabs();
-      await loadBookmarks();
+      applyCurrentFilters();
     } else {
       alert('No open tabs found for this folder');
     }
@@ -485,15 +506,21 @@ function renderBookmarks(bookmarks, parentElement = null, level = 0, parentColla
 
 function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   // Parse title for metadata (starred, etc.)
-  const { displayTitle, metadata } = parseBookmarkTitle(bookmark.title);
+  const { displayTitle, metadata } = FilterSystem.parseTitle(bookmark.title);
+
+  // Check for filter metadata (context items are dimmed)
+  const isContextItem = FilterSystem.isContext(bookmark);
 
   const div = document.createElement('div');
   div.className = bookmark.children ? 'bookmark-folder' : 'bookmark-item';
+  if (isContextItem) {
+    div.classList.add('filter-context');
+  }
   div.dataset.id = bookmark.id;
   div.dataset.parentId = bookmark.parentId;
   div.dataset.index = bookmark.index;
   div.draggable = true;
-  
+
   if (shouldHide) {
     div.style.display = 'none';
   }
@@ -654,7 +681,7 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     if (confirm(`Delete "${displayTitle}"?`)) {
       chrome.bookmarks.remove(bookmark.id, async () => {
         await loadOpenTabs();
-        await loadBookmarks();
+        applyCurrentFilters();
       });
     }
   };
@@ -679,7 +706,7 @@ function toggleFolder(folderId) {
   } else {
     collapsedFolders.add(folderId);
   }
-  loadBookmarks();
+  applyCurrentFilters();
 }
 
 // Drag and drop handlers
@@ -738,12 +765,12 @@ function handleDrop(e) {
       index: 0
     }, async () => {
       await loadOpenTabs();
-      await loadBookmarks();
+      applyCurrentFilters();
     });
   } else {
     // Reorder in same parent
     let newIndex = targetIndex;
-    
+
     // Chrome API quirk: moving down in same folder requires index adjustment
     if (draggedBookmark.parentId === targetParentId && draggedBookmark.index < newIndex) {
       newIndex++;
@@ -754,85 +781,9 @@ function handleDrop(e) {
       index: newIndex
     }, async () => {
       await loadOpenTabs();
-      await loadBookmarks();
+      applyCurrentFilters();
     });
   }
 }
-
-//-------------------------------------
-// Filter but leave tree structure
-
-function filterBookmarks(query) {
-  if (!query.trim()) {
-    loadBookmarks();
-    return;
-  }
-
-  chrome.bookmarks.search(query, (results) => {
-    if (results.length === 0) {
-      const container = document.getElementById('bookmarkTree');
-      container.innerHTML = '<div class="no-results">No bookmarks found</div>';
-      return;
-    }
-    
-    // Get matching bookmark IDs
-    const matchingIds = new Set(results.map(r => r.id));
-    
-    // Build tree with matching items and their parents
-    chrome.bookmarks.getTree((tree) => {
-      const filteredTree = filterTree(tree[0].children, matchingIds);
-      renderBookmarks(filteredTree);
-    });
-  });
-}
-
-function filterTree(bookmarks, matchingIds, level = 0) {
-  const filtered = [];
-  
-  for (let bookmark of bookmarks) {
-    if (bookmark.children) {
-      // It's a folder - recursively filter children
-      const filteredChildren = filterTree(bookmark.children, matchingIds, level + 1);
-      
-      // Include folder if it has matching children OR if folder itself matches
-      if (filteredChildren.length > 0 || matchingIds.has(bookmark.id)) {
-        filtered.push({
-          ...bookmark,
-          children: filteredChildren
-        });
-      }
-    } else {
-      // It's a bookmark - include if it matches
-      if (matchingIds.has(bookmark.id)) {
-        filtered.push(bookmark);
-      }
-    }
-  }
-  
-  return filtered;
-}
-
-// // Search/filter
-// function filterBookmarks(query) {
-//   if (!query.trim()) {
-//     loadBookmarks();
-//     return;
-//   }
-
-//   chrome.bookmarks.search(query, (results) => {
-//     const container = document.getElementById('bookmarkTree');
-//     container.innerHTML = '';
-    
-//     if (results.length === 0) {
-//       container.innerHTML = '<div class="no-results">No bookmarks found</div>';
-//       return;
-//     }
-
-//     results.forEach(bookmark => {
-//       const item = createBookmarkElement(bookmark, 0, false, false);
-//       container.appendChild(item);
-//     });
-//   });
-// }
 
 //----------------------------------------
