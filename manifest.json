@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Slick Bookmarks Editor",
+  "name": "GoldenTab",
   "version": "1.0",
-  "description": "A modern bookmark manager with drag and drop support",
+  "description": "A modern bookmark manager",
   "permissions": [
     "bookmarks",
     "tabs",
