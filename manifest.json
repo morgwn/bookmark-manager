@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Slick Bookmarks Editor",
+  "version": "1.0",
+  "description": "A modern bookmark manager with drag and drop support",
+  "permissions": [
+    "bookmarks",
+    "tabs"
+  ],
+  "action": {
+    // "default_icon": {
+    //   "16": "icon16.png",
+    //   "48": "icon48.png",
+    //   "128": "icon128.png"
+    // }
+  },
+  "background": {
+    "service_worker": "background.js"
+  }//,
+  // "icons": {
+  //   "16": "icon16.png",
+  //   "48": "icon48.png",
+  //   "128": "icon128.png"
+  // }
+}
