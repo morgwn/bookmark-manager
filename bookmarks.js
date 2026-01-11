@@ -143,6 +143,8 @@ function setupEventListeners() {
   });
 
   document.getElementById('closeWorkspaceBtn').addEventListener('click', deactivateWorkspace);
+
+  document.getElementById('sortTabsBtn').addEventListener('click', sortTabsByWebsite);
 }
 
 function setupModalListeners() {
@@ -261,6 +263,9 @@ function setupTabListeners() {
   chrome.tabs.onCreated.addListener(scheduleReload);
   chrome.tabs.onUpdated.addListener(scheduleReload);
   chrome.tabs.onRemoved.addListener(scheduleReload);
+  chrome.tabs.onMoved.addListener(scheduleReload);
+  chrome.tabs.onDetached.addListener(scheduleReload);
+  chrome.tabs.onAttached.addListener(scheduleReload);
 }
 
 // function setupTabListeners() {
@@ -449,6 +454,24 @@ async function loadOpenTabs() {
     }
     openTabsMap.get(normalized).push(tab.id);
   });
+}
+
+async function sortTabsByWebsite() {
+  if (orderedTabs.length === 0) return;
+
+  // Sort by hostname, then by title
+  const sorted = [...orderedTabs].sort((a, b) => {
+    const hostA = new URL(a.url).hostname.replace(/^www\./, '');
+    const hostB = new URL(b.url).hostname.replace(/^www\./, '');
+    const hostCompare = hostA.localeCompare(hostB);
+    if (hostCompare !== 0) return hostCompare;
+    return (a.title || '').localeCompare(b.title || '');
+  });
+
+  // Move each tab to its new position
+  for (let i = 0; i < sorted.length; i++) {
+    await chrome.tabs.move(sorted[i].id, { index: i });
+  }
 }
 
 function normalizeUrl(url) {
@@ -660,15 +683,54 @@ async function openFolderBookmarks(folderId, recursive) {
 }
 
 // Rendering
+let draggedTabId = null;
+
 function renderActiveTabs() {
   console.log('renderActiveTabs called, orderedTabs:', orderedTabs.length);
   const container = document.getElementById('activeTabsList');
   console.log('activeTabsList container:', container);
   container.innerHTML = '';
 
-  orderedTabs.forEach(tab => {
+  orderedTabs.forEach((tab, index) => {
     const item = document.createElement('div');
     item.className = 'tab-item';
+    item.draggable = true;
+    item.dataset.tabId = tab.id;
+    item.dataset.index = index;
+
+    // Drag events
+    item.addEventListener('dragstart', (e) => {
+      draggedTabId = tab.id;
+      item.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
+    item.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      draggedTabId = null;
+      // Clear all drag-over states
+      container.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    });
+
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (draggedTabId && draggedTabId !== tab.id) {
+        item.classList.add('drag-over');
+      }
+    });
+
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('drag-over');
+    });
+
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('drag-over');
+      if (draggedTabId && draggedTabId !== tab.id) {
+        // Move the dragged tab to this position
+        await chrome.tabs.move(draggedTabId, { index: tab.index });
+      }
+    });
 
     // Double-click to focus tab
     item.addEventListener('dblclick', () => {
