@@ -306,7 +306,8 @@ body {
   border-color: #ff6b6b;
 }
 
-.tab-item.will-close {
+.tab-item.will-close,
+.bookmark-item.will-close {
   opacity: 0.3;
 }
 
@@ -500,6 +501,12 @@ body {
   background: #353a45;
   color: #e4e6eb;
   border-color: #5865f2;
+}
+
+.actions button.text-btn {
+  font-size: 10px;
+  width: auto;
+  padding: 0 6px;
 }
 
 /* Drag and drop states */

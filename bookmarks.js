@@ -927,6 +927,84 @@ async function openFolderBookmarks(folderId, recursive) {
   }
 }
 
+async function sortFolderBookmarks(folderId) {
+  try {
+    const children = await chrome.bookmarks.getChildren(folderId);
+
+    // Separate folders and bookmarks, sort each group by title
+    const folders = children.filter(c => c.children !== undefined || !c.url);
+    const bookmarks = children.filter(c => c.url);
+
+    folders.sort((a, b) => a.title.localeCompare(b.title));
+    bookmarks.sort((a, b) => a.title.localeCompare(b.title));
+
+    // Move folders first, then bookmarks
+    const sorted = [...folders, ...bookmarks];
+    for (let i = 0; i < sorted.length; i++) {
+      await chrome.bookmarks.move(sorted[i].id, { parentId: folderId, index: i });
+    }
+
+    applyCurrentFilters();
+  } catch (error) {
+    console.error('Error sorting folder:', error);
+    alert('Error: ' + error.message);
+  }
+}
+
+async function deduplicateFolderBookmarks(folderId) {
+  try {
+    const toRemove = await findFolderDuplicates(folderId);
+
+    if (toRemove.length === 0) {
+      alert('No duplicates found');
+      return;
+    }
+
+    if (confirm(`Remove ${toRemove.length} duplicate bookmark${toRemove.length > 1 ? 's' : ''}?`)) {
+      for (const bookmark of toRemove) {
+        await chrome.bookmarks.remove(bookmark.id);
+      }
+      applyCurrentFilters();
+    }
+  } catch (error) {
+    console.error('Error removing duplicates:', error);
+    alert('Error: ' + error.message);
+  }
+}
+
+async function findFolderDuplicates(folderId) {
+  const children = await chrome.bookmarks.getChildren(folderId);
+  const seen = new Set();
+  const duplicates = [];
+
+  for (const child of children) {
+    if (!child.url) continue;
+
+    const normalized = normalizeUrl(child.url);
+    if (seen.has(normalized)) {
+      duplicates.push(child);
+    } else {
+      seen.add(normalized);
+    }
+  }
+
+  return duplicates;
+}
+
+async function previewFolderDuplicates(folderId) {
+  const duplicates = await findFolderDuplicates(folderId);
+  duplicates.forEach(bookmark => {
+    const el = document.querySelector(`.bookmark-item[data-id="${bookmark.id}"]`);
+    if (el) el.classList.add('will-close');
+  });
+}
+
+function clearFolderDuplicatePreview() {
+  document.querySelectorAll('.bookmark-item.will-close').forEach(el => {
+    el.classList.remove('will-close');
+  });
+}
+
 // Rendering
 let draggedTabId = null;
 
@@ -1299,6 +1377,30 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     actions.appendChild(openBtn);
   } else {
     // Folder actions
+
+    // Deduplicate button
+    const dedupBtn = document.createElement('button');
+    dedupBtn.textContent = '2→1';
+    dedupBtn.title = 'Remove duplicate bookmarks';
+    dedupBtn.className = 'text-btn';
+    dedupBtn.onclick = (e) => {
+      e.stopPropagation();
+      deduplicateFolderBookmarks(bookmark.id);
+    };
+    dedupBtn.onmouseenter = () => previewFolderDuplicates(bookmark.id);
+    dedupBtn.onmouseleave = clearFolderDuplicatePreview;
+    actions.appendChild(dedupBtn);
+
+    // Sort button
+    const sortBtn = document.createElement('button');
+    sortBtn.textContent = 'A→Z';
+    sortBtn.title = 'Sort bookmarks alphabetically';
+    sortBtn.className = 'text-btn';
+    sortBtn.onclick = (e) => {
+      e.stopPropagation();
+      sortFolderBookmarks(bookmark.id);
+    };
+    actions.appendChild(sortBtn);
 
     // Star button
     const starBtn = document.createElement('button');
