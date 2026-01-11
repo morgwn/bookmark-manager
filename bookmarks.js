@@ -301,10 +301,13 @@ function drawConnections(folderId) {
 
     const normalizedUrl = normalizeUrl(url);
 
-    // Find matching tab by comparing URLs stored in dataset
+    // Find matching tab by comparing URLs (path-match: same path, query params can differ)
+    const bookmarkPath = normalizedUrl.split('?')[0];
     const matchingTab = [...document.querySelectorAll('.tab-item')].find(tab => {
       const tabUrl = tab.querySelector('.tab-title')?.title;
-      return tabUrl && normalizeUrl(tabUrl) === normalizedUrl;
+      if (!tabUrl) return false;
+      const tabPath = normalizeUrl(tabUrl).split('?')[0];
+      return tabPath === bookmarkPath;
     });
 
     if (matchingTab) {
@@ -363,10 +366,15 @@ function drawConnectionsFromTab(tabUrl) {
   const rightPanel = document.querySelector('.right-panel');
   const maxBookmarkX = rightPanel ? rightPanel.getBoundingClientRect().left - 25 : Infinity;
 
+  // Path-match: same path, query params can differ
+  const tabPath = normalizedTabUrl.split('?')[0];
+
   // Find ALL matching tabs
   const matchingTabs = [...document.querySelectorAll('.tab-item')].filter(tab => {
     const url = tab.querySelector('.tab-title')?.title;
-    return url && normalizeUrl(url) === normalizedTabUrl;
+    if (!url) return false;
+    const urlPath = normalizeUrl(url).split('?')[0];
+    return urlPath === tabPath;
   });
 
   // Find ALL matching bookmarks (visible only)
@@ -374,7 +382,9 @@ function drawConnectionsFromTab(tabUrl) {
     const rect = bookmark.getBoundingClientRect();
     if (rect.height === 0 || rect.width === 0) return false;
     const bookmarkUrl = bookmark.dataset.url;
-    return bookmarkUrl && normalizeUrl(bookmarkUrl) === normalizedTabUrl;
+    if (!bookmarkUrl) return false;
+    const bookmarkPath = normalizeUrl(bookmarkUrl).split('?')[0];
+    return bookmarkPath === tabPath;
   });
 
   // Draw lines between every tab and every bookmark
@@ -708,15 +718,21 @@ function normalizeUrl(url) {
 function urlMatches(bookmarkUrl, openUrls) {
   if (!bookmarkUrl) return false;
   const normalized = normalizeUrl(bookmarkUrl);
-  
-  if (openUrls.has(normalized)) return true;
-  
-  for (let openUrl of openUrls) {
-    if (openUrl.startsWith(normalized) || normalized.startsWith(openUrl)) {
-      return true;
-    }
+  return urlInSet(normalized, openUrls);
+}
+
+// Check if a URL matches any URL in a Set (exact match or same path with different query params)
+function urlInSet(normalizedUrl, urlSet) {
+  // Exact match
+  if (urlSet.has(normalizedUrl)) return true;
+
+  // Path match - same path, different query params counts as match
+  const urlPath = normalizedUrl.split('?')[0];
+  for (let setUrl of urlSet) {
+    const setPath = setUrl.split('?')[0];
+    if (urlPath === setPath) return true;
   }
-  
+
   return false;
 }
 
@@ -972,8 +988,8 @@ function renderActiveTabs() {
     // - Bright dot = bookmarked in current workspace (safe to close)
     // - Dim dot = bookmarked elsewhere (still saved, but not in this workspace)
     const normalizedUrl = normalizeUrl(tab.url);
-    const inWorkspace = workspaceBookmarkUrls.has(normalizedUrl);
-    const inExternal = !inWorkspace && allBookmarkUrls.has(normalizedUrl);
+    const inWorkspace = urlInSet(normalizedUrl, workspaceBookmarkUrls);
+    const inExternal = !inWorkspace && urlInSet(normalizedUrl, allBookmarkUrls);
 
     if (inWorkspace || inExternal) {
       const indicator = document.createElement('span');
