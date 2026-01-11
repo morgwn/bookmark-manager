@@ -14,6 +14,7 @@ let orderedTabs = []; // Tabs in browser order for Active Tabs folder
 let allBookmarkUrls = new Set(); // All bookmark URLs for indicator dots
 let workspaceBookmarkUrls = new Set(); // URLs in current workspace (for bright dot)
 let bookmarkUrlLocations = new Map(); // URL → [{id, title, parentId, parentTitle}] (for multi-location indicator)
+let pendingNoteData = null; // For note modal: {id, title, displayTitle, metadata}
 let connectionSvg = null; // SVG overlay for drawing connection lines
 let pendingBookmarkTabs = new Map(); // Track tabs opened from bookmarks: tabId → originalUrl
 let redirectedTabs = new Map(); // Tabs that redirected: tabId → originalUrl
@@ -254,6 +255,44 @@ function setupModalListeners() {
     if (e.target.id === 'looseTabsModal') {
       closeLooseTabsModal('cancel');
     }
+  });
+
+  // Note modal buttons
+  document.getElementById('noteSave').addEventListener('click', async () => {
+    if (pendingNoteData) {
+      const noteText = document.getElementById('noteTextarea').value.substring(0, 250);
+      pendingNoteData.metadata.note = noteText;
+      const newTitle = FilterSystem.buildTitle(pendingNoteData.displayTitle, pendingNoteData.metadata);
+      await chrome.bookmarks.update(pendingNoteData.id, { title: newTitle });
+      closeNoteModal();
+      applyCurrentFilters();
+    }
+  });
+
+  document.getElementById('noteDelete').addEventListener('click', async () => {
+    if (pendingNoteData) {
+      pendingNoteData.metadata.note = '';
+      const newTitle = FilterSystem.buildTitle(pendingNoteData.displayTitle, pendingNoteData.metadata);
+      await chrome.bookmarks.update(pendingNoteData.id, { title: newTitle });
+      closeNoteModal();
+      applyCurrentFilters();
+    }
+  });
+
+  document.getElementById('noteCancel').addEventListener('click', closeNoteModal);
+
+  document.getElementById('noteModal').addEventListener('click', (e) => {
+    if (e.target.id === 'noteModal') {
+      closeNoteModal();
+    }
+  });
+
+  // Note textarea character counter
+  document.getElementById('noteTextarea').addEventListener('input', (e) => {
+    const counter = document.getElementById('noteCharCount');
+    const len = e.target.value.length;
+    counter.textContent = `${len}/250`;
+    counter.style.color = len > 250 ? '#ff6b6b' : '#8b8d94';
   });
 }
 
@@ -532,6 +571,31 @@ async function toggleWorkspace() {
   closeWorkspaceModal();
   applyCurrentFilters();
   renderWorkspaceSidebar();
+}
+
+//------------------------------------------
+// Bookmark Notes
+//------------------------------------------
+function showNoteModal(bookmarkId, fullTitle, displayTitle, metadata) {
+  pendingNoteData = { id: bookmarkId, title: fullTitle, displayTitle, metadata };
+  const modal = document.getElementById('noteModal');
+  const header = document.getElementById('noteModalHeader');
+  const textarea = document.getElementById('noteTextarea');
+  const deleteBtn = document.getElementById('noteDelete');
+  const counter = document.getElementById('noteCharCount');
+
+  header.textContent = `Note: ${displayTitle}`;
+  textarea.value = metadata.note || '';
+  deleteBtn.style.display = metadata.note ? 'block' : 'none';
+  counter.textContent = `${(metadata.note || '').length}/250`;
+
+  modal.style.display = 'flex';
+  textarea.focus();
+}
+
+function closeNoteModal() {
+  document.getElementById('noteModal').style.display = 'none';
+  pendingNoteData = null;
 }
 
 //------------------------------------------
@@ -1356,6 +1420,20 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     content.appendChild(workspaceIndicator);
   }
 
+  // Note indicator (shown if bookmark has a note)
+  const hasNote = metadata.note;
+  if (hasNote) {
+    const noteIndicator = document.createElement('span');
+    noteIndicator.className = 'note-indicator';
+    noteIndicator.textContent = '📝';
+    noteIndicator.title = hasNote;
+    noteIndicator.onclick = (e) => {
+      e.stopPropagation();
+      showNoteModal(bookmark.id, bookmark.title, displayTitle, metadata);
+    };
+    content.appendChild(noteIndicator);
+  }
+
   // Multi-location indicator (bookmark exists in multiple places)
   if (!bookmark.children && bookmark.url) {
     const normalized = normalizeUrl(bookmark.url);
@@ -1405,6 +1483,17 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
 
   if (!bookmark.children) {
     // Regular bookmark actions
+    // Note button
+    const noteBtn = document.createElement('button');
+    noteBtn.textContent = '📝';
+    noteBtn.title = hasNote ? 'Edit Note' : 'Add Note';
+    noteBtn.className = hasNote ? 'has-note' : '';
+    noteBtn.onclick = (e) => {
+      e.stopPropagation();
+      showNoteModal(bookmark.id, bookmark.title, displayTitle, metadata);
+    };
+    actions.appendChild(noteBtn);
+
     // Star button
     const starBtn = document.createElement('button');
     starBtn.textContent = metadata.starred ? '★' : '☆';
@@ -1439,6 +1528,17 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     actions.appendChild(openBtn);
   } else {
     // Folder actions
+
+    // Note button
+    const noteBtn = document.createElement('button');
+    noteBtn.textContent = '📝';
+    noteBtn.title = hasNote ? 'Edit Note' : 'Add Note';
+    noteBtn.className = hasNote ? 'has-note' : '';
+    noteBtn.onclick = (e) => {
+      e.stopPropagation();
+      showNoteModal(bookmark.id, bookmark.title, displayTitle, metadata);
+    };
+    actions.appendChild(noteBtn);
 
     // Deduplicate button
     const dedupBtn = document.createElement('button');

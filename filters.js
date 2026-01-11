@@ -18,21 +18,33 @@ const FilterSystem = {
   // Metadata Parsing (title format: "Title {*,flag1,flag2}")
   //------------------------------------------
   parseTitle(title) {
-    if (!title) return { displayTitle: 'Untitled', metadata: { starred: false, workspace: false, _flags: [] } };
+    if (!title) return { displayTitle: 'Untitled', metadata: { starred: false, workspace: false, note: '', _flags: [] } };
 
     const match = title.match(/^(.*?) \{([^}]*)\}$/);
     if (!match) {
-      return { displayTitle: title, metadata: { starred: false, workspace: false, _flags: [] } };
+      return { displayTitle: title, metadata: { starred: false, workspace: false, note: '', _flags: [] } };
     }
 
     const displayTitle = match[1] || 'Untitled';
     const flags = match[2].split(',').map(f => f.trim()).filter(f => f);
+
+    // Extract note from flags (format: n:encoded_note)
+    let note = '';
+    const noteFlag = flags.find(f => f.startsWith('n:'));
+    if (noteFlag) {
+      try {
+        note = decodeURIComponent(noteFlag.substring(2));
+      } catch (e) {
+        note = noteFlag.substring(2); // fallback if decode fails
+      }
+    }
 
     return {
       displayTitle,
       metadata: {
         starred: flags.includes('*'),
         workspace: flags.includes('workspace'),
+        note,
         _flags: flags
       }
     };
@@ -55,6 +67,15 @@ const FilterSystem = {
       flags.push('workspace');
     } else if (!metadata.workspace && workspaceIndex !== -1) {
       flags.splice(workspaceIndex, 1);
+    }
+
+    // Handle note flag - remove old note first, then add new if present
+    const oldNoteIndex = flags.findIndex(f => f.startsWith('n:'));
+    if (oldNoteIndex !== -1) {
+      flags.splice(oldNoteIndex, 1);
+    }
+    if (metadata.note && metadata.note.trim()) {
+      flags.push('n:' + encodeURIComponent(metadata.note.trim()));
     }
 
     if (flags.length === 0) return displayTitle;

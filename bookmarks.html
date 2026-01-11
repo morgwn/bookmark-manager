@@ -90,6 +90,20 @@
     </div>
   </div>
 
+  <!-- Modal for bookmark notes -->
+  <div id="noteModal" class="modal">
+    <div class="modal-content note-modal-content">
+      <div class="modal-header" id="noteModalHeader">Bookmark Note</div>
+      <textarea id="noteTextarea" class="note-textarea" placeholder="Add a note..." maxlength="250"></textarea>
+      <div class="note-char-count" id="noteCharCount">0/250</div>
+      <div class="modal-buttons">
+        <button id="noteSave" class="modal-btn">Save Note</button>
+        <button id="noteDelete" class="modal-btn">Delete Note</button>
+        <button id="noteCancel" class="modal-btn cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="filters.js"></script>
   <script src="workspace.js"></script>
   <script src="contextmenu.js"></script>
