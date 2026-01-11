@@ -7,6 +7,7 @@ let openTabUrls = new Set();
 let openTabsMap = new Map();
 let pendingFolderId = null;
 let pendingOpenFolderId = null;
+let pendingWorkspaceData = null;
 
 //------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -176,6 +177,21 @@ function setupModalListeners() {
       pendingOpenFolderId = null;
     }
   });
+
+  // Workspace modal buttons
+  document.getElementById('workspaceConfirm').addEventListener('click', async () => {
+    await toggleWorkspace();
+  });
+
+  document.getElementById('workspaceCancel').addEventListener('click', () => {
+    closeWorkspaceModal();
+  });
+
+  document.getElementById('workspaceModal').addEventListener('click', (e) => {
+    if (e.target.id === 'workspaceModal') {
+      closeWorkspaceModal();
+    }
+  });
 }
 
 //------------------------------------
@@ -255,6 +271,45 @@ function showOpenModal(folderTitle, count, hasSubfolder) {
 
 function closeOpenModal() {
   document.getElementById('openModal').style.display = 'none';
+}
+
+function showWorkspaceModal(bookmarkId, fullTitle, displayTitle, isCurrentlyWorkspace) {
+  const modal = document.getElementById('workspaceModal');
+  const header = document.getElementById('workspaceModalHeader');
+  const message = document.getElementById('workspaceModalMessage');
+  const confirmBtn = document.getElementById('workspaceConfirm');
+
+  pendingWorkspaceData = { bookmarkId, fullTitle, isCurrentlyWorkspace };
+
+  if (isCurrentlyWorkspace) {
+    header.textContent = 'Remove Workspace';
+    message.textContent = `Remove "${displayTitle}" as a workspace?`;
+    confirmBtn.textContent = 'Remove Workspace';
+  } else {
+    header.textContent = 'Make Workspace';
+    message.textContent = `Make "${displayTitle}" a workspace? This folder will be marked for session management.`;
+    confirmBtn.textContent = 'Make Workspace';
+  }
+
+  modal.style.display = 'flex';
+}
+
+function closeWorkspaceModal() {
+  document.getElementById('workspaceModal').style.display = 'none';
+  pendingWorkspaceData = null;
+}
+
+async function toggleWorkspace() {
+  if (!pendingWorkspaceData) return;
+
+  const { bookmarkId, fullTitle, isCurrentlyWorkspace } = pendingWorkspaceData;
+  const parsed = FilterSystem.parseTitle(fullTitle);
+  parsed.metadata.workspace = !isCurrentlyWorkspace;
+  const newTitle = FilterSystem.buildTitle(parsed.displayTitle, parsed.metadata);
+
+  await chrome.bookmarks.update(bookmarkId, { title: newTitle });
+  closeWorkspaceModal();
+  applyCurrentFilters();
 }
 
 // Tab management
@@ -614,6 +669,15 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     content.appendChild(starIndicator);
   }
 
+  // Workspace indicator (shown to the right of title if workspace)
+  if (metadata.workspace) {
+    const workspaceIndicator = document.createElement('span');
+    workspaceIndicator.className = 'workspace-indicator';
+    workspaceIndicator.textContent = '🗂️';
+    workspaceIndicator.title = 'Workspace';
+    content.appendChild(workspaceIndicator);
+  }
+
   // URL display for bookmarks
   if (!bookmark.children && bookmark.url) {
     const url = document.createElement('span');
@@ -660,6 +724,17 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     };
     actions.appendChild(openBtn);
   } else {
+    // Workspace toggle button (folders only)
+    const workspaceBtn = document.createElement('button');
+    workspaceBtn.textContent = metadata.workspace ? '🗂️' : '📁';
+    workspaceBtn.title = metadata.workspace ? 'Remove Workspace' : 'Make Workspace';
+    workspaceBtn.className = metadata.workspace ? 'workspace-active' : '';
+    workspaceBtn.onclick = (e) => {
+      e.stopPropagation();
+      showWorkspaceModal(bookmark.id, bookmark.title, displayTitle, metadata.workspace);
+    };
+    actions.appendChild(workspaceBtn);
+
     // Close folder tabs button
     const closeFolderBtn = document.createElement('button');
     closeFolderBtn.innerHTML = '🚪';

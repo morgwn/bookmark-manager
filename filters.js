@@ -18,11 +18,11 @@ const FilterSystem = {
   // Metadata Parsing (title format: "Title {*,flag1,flag2}")
   //------------------------------------------
   parseTitle(title) {
-    if (!title) return { displayTitle: 'Untitled', metadata: { starred: false, _flags: [] } };
+    if (!title) return { displayTitle: 'Untitled', metadata: { starred: false, workspace: false, _flags: [] } };
 
     const match = title.match(/^(.*?) \{([^}]*)\}$/);
     if (!match) {
-      return { displayTitle: title, metadata: { starred: false, _flags: [] } };
+      return { displayTitle: title, metadata: { starred: false, workspace: false, _flags: [] } };
     }
 
     const displayTitle = match[1] || 'Untitled';
@@ -32,6 +32,7 @@ const FilterSystem = {
       displayTitle,
       metadata: {
         starred: flags.includes('*'),
+        workspace: flags.includes('workspace'),
         _flags: flags
       }
     };
@@ -40,11 +41,20 @@ const FilterSystem = {
   buildTitle(displayTitle, metadata) {
     const flags = [...(metadata._flags || [])];
 
+    // Handle starred flag
     const starIndex = flags.indexOf('*');
     if (metadata.starred && starIndex === -1) {
       flags.unshift('*');
     } else if (!metadata.starred && starIndex !== -1) {
       flags.splice(starIndex, 1);
+    }
+
+    // Handle workspace flag
+    const workspaceIndex = flags.indexOf('workspace');
+    if (metadata.workspace && workspaceIndex === -1) {
+      flags.push('workspace');
+    } else if (!metadata.workspace && workspaceIndex !== -1) {
+      flags.splice(workspaceIndex, 1);
     }
 
     if (flags.length === 0) return displayTitle;
@@ -57,6 +67,11 @@ const FilterSystem = {
   isStarred(bookmark) {
     const { metadata } = this.parseTitle(bookmark.title);
     return metadata.starred;
+  },
+
+  isWorkspace(bookmark) {
+    const { metadata } = this.parseTitle(bookmark.title);
+    return metadata.workspace;
   },
 
   hasStarredDescendant(bookmark) {

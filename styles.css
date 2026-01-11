@@ -212,6 +212,13 @@ body {
   margin-right: 8px;
 }
 
+/* Workspace indicator (shown next to title when workspace) */
+.workspace-indicator {
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
 /* Starred button state */
 .actions button.starred {
   color: #ffc107;
@@ -220,6 +227,16 @@ body {
 
 .actions button.starred:hover {
   background: rgba(255, 193, 7, 0.15);
+}
+
+/* Workspace button state */
+.actions button.workspace-active {
+  color: #5865f2;
+  border-color: #5865f2;
+}
+
+.actions button.workspace-active:hover {
+  background: rgba(88, 101, 242, 0.15);
 }
 
 .url {
