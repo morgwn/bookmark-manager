@@ -70,6 +70,10 @@ const ContextMenu = {
       finalY = viewportHeight - rect.height - 8;
     }
 
+    // Never go outside viewport - clamp to edges
+    if (finalX < 8) finalX = 8;
+    if (finalY < 8) finalY = 8;
+
     this.element.style.left = `${finalX}px`;
     this.element.style.top = `${finalY}px`;
   },
@@ -89,6 +93,7 @@ contextMenuStyles.textContent = `
   position: fixed;
   z-index: 2000;
   min-width: 160px;
+  max-width: 450px;
   background: #23272f;
   border: 1px solid #3a3f4b;
   border-radius: 6px;
@@ -98,14 +103,21 @@ contextMenuStyles.textContent = `
 
 .context-menu-item {
   padding: 8px 14px;
-  font-size: 13px;
-  color: #e4e6eb;
+  font-size: 12px;
+  color: #b9bbbe;
   cursor: pointer;
   transition: background 0.1s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .context-menu-item:hover {
   background: #353a45;
+}
+
+.context-menu-item strong {
+  color: #e4e6eb;
 }
 
 .context-menu-item.disabled {

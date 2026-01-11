@@ -16,6 +16,8 @@ let workspaceBookmarkUrls = new Set(); // URLs in current workspace (for bright 
 let bookmarkUrlLocations = new Map(); // URL → [{id, title, parentId, parentTitle}] (for multi-location indicator)
 let pendingNoteData = null; // For note modal: {id, title, displayTitle, metadata}
 let connectionSvg = null; // SVG overlay for drawing connection lines
+const CLOSED_FOLDER_NAME = '.closed';
+const MAX_CLOSED_TABS = 20;
 let pendingBookmarkTabs = new Map(); // Track tabs opened from bookmarks: tabId → originalUrl
 let redirectedTabs = new Map(); // Tabs that redirected: tabId → originalUrl
 
@@ -140,6 +142,7 @@ function setupEventListeners() {
   document.getElementById('dedupTabsBtn').addEventListener('click', closeDuplicateTabs);
   document.getElementById('dedupTabsBtn').addEventListener('mouseenter', previewDuplicateTabs);
   document.getElementById('dedupTabsBtn').addEventListener('mouseleave', clearDuplicatePreview);
+  document.getElementById('closedTabsBtn').addEventListener('click', showClosedTabsMenu);
 
   // Active tabs panel accepts bookmark drops (for "past the end" drops)
   const activeTabsList = document.getElementById('activeTabsList');
@@ -481,6 +484,15 @@ function setupTabListeners() {
     }
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
+    // Capture tab info before reload clears orderedTabs
+    const closedTab = orderedTabs.find(t => t.id === tabId);
+    if (closedTab && activeWorkspaceFolder) {
+      // Don't save chrome:// or extension pages
+      if (!closedTab.url.startsWith('chrome://') && !closedTab.url.startsWith('chrome-extension://')) {
+        addClosedTab(activeWorkspaceFolder.id, closedTab.url, closedTab.title);
+      }
+    }
+
     scheduleReload();
     pendingBookmarkTabs.delete(tabId);
     redirectedTabs.delete(tabId);
@@ -599,6 +611,132 @@ function closeNoteModal() {
 }
 
 //------------------------------------------
+// Closed Tabs (per workspace)
+//------------------------------------------
+async function getOrCreateClosedFolder(workspaceId) {
+  const children = await chrome.bookmarks.getChildren(workspaceId);
+  const existing = children.find(c => c.title === CLOSED_FOLDER_NAME);
+  if (existing) return existing.id;
+
+  const folder = await chrome.bookmarks.create({
+    parentId: workspaceId,
+    title: CLOSED_FOLDER_NAME,
+    index: 0
+  });
+  return folder.id;
+}
+
+async function addClosedTab(workspaceId, url, title) {
+  if (!workspaceId || !url) return;
+
+  const folderId = await getOrCreateClosedFolder(workspaceId);
+
+  // Add new closed tab
+  await chrome.bookmarks.create({
+    parentId: folderId,
+    title: title || url,
+    url: url
+  });
+
+  // Prune old items if over limit
+  const children = await chrome.bookmarks.getChildren(folderId);
+  if (children.length > MAX_CLOSED_TABS) {
+    // Sort by dateAdded, remove oldest
+    const sorted = children.sort((a, b) => a.dateAdded - b.dateAdded);
+    const toRemove = sorted.slice(0, children.length - MAX_CLOSED_TABS);
+    for (const item of toRemove) {
+      await chrome.bookmarks.remove(item.id);
+    }
+  }
+
+  updateClosedTabsButton();
+}
+
+async function getClosedTabs(workspaceId) {
+  if (!workspaceId) return [];
+
+  try {
+    const children = await chrome.bookmarks.getChildren(workspaceId);
+    const closedFolder = children.find(c => c.title === CLOSED_FOLDER_NAME);
+    if (!closedFolder) return [];
+
+    const tabs = await chrome.bookmarks.getChildren(closedFolder.id);
+    // Return sorted by dateAdded descending (most recent first)
+    return tabs.filter(t => t.url).sort((a, b) => b.dateAdded - a.dateAdded);
+  } catch {
+    return [];
+  }
+}
+
+async function reopenClosedTab(bookmarkId) {
+  try {
+    const results = await chrome.bookmarks.get(bookmarkId);
+    if (results[0] && results[0].url) {
+      await chrome.tabs.create({ url: results[0].url, active: true });
+      await chrome.bookmarks.remove(bookmarkId);
+      updateClosedTabsButton();
+    }
+  } catch (e) {
+    console.error('Error reopening closed tab:', e);
+  }
+}
+
+async function updateClosedTabsButton() {
+  const btn = document.getElementById('closedTabsBtn');
+  if (!activeWorkspaceFolder) {
+    btn.classList.add('hidden');
+    return;
+  }
+
+  const closedTabs = await getClosedTabs(activeWorkspaceFolder.id);
+  if (closedTabs.length === 0) {
+    btn.classList.add('hidden');
+  } else {
+    btn.classList.remove('hidden');
+    btn.innerHTML = `↩<span class="count">${closedTabs.length}</span>`;
+  }
+}
+
+async function showClosedTabsMenu(e) {
+  if (!activeWorkspaceFolder) return;
+
+  const closedTabs = await getClosedTabs(activeWorkspaceFolder.id);
+  if (closedTabs.length === 0) return;
+
+  // Bulk actions at top (always visible)
+  const items = [
+    {
+      label: '<strong>Restore all</strong>',
+      action: async () => {
+        for (const tab of closedTabs) {
+          await chrome.tabs.create({ url: tab.url, active: false });
+          await chrome.bookmarks.remove(tab.id);
+        }
+        updateClosedTabsButton();
+      }
+    },
+    {
+      label: '<strong>Clear all</strong>',
+      action: async () => {
+        for (const tab of closedTabs) {
+          await chrome.bookmarks.remove(tab.id);
+        }
+        updateClosedTabsButton();
+      }
+    },
+    { separator: true },
+    // Closed tabs below (newest first, oldest at bottom may be cut off)
+    ...closedTabs.map(tab => ({
+      label: tab.title || tab.url,
+      action: () => reopenClosedTab(tab.id)
+    }))
+  ];
+
+  const rect = e.target.getBoundingClientRect();
+  ContextMenu.show(rect.left, rect.bottom + 4, items);
+}
+
+//------------------------------------------
 // Workspace Sidebar & UI
 //------------------------------------------
 function updateWorkspaceUI() {
@@ -614,6 +752,7 @@ function updateWorkspaceUI() {
   }
 
   renderWorkspaceSidebar();
+  updateClosedTabsButton();
 }
 
 // Find all workspace folders in tree order
@@ -1225,8 +1364,8 @@ async function loadBookmarks() {
 // Recursively collects all bookmark URLs from a node into the given Set
 // skipSession: if true, skips .session folders (used for workspace set to exclude saved session tabs)
 function buildBookmarkUrlSet(node, targetSet, skipSession = false) {
-  // Skip .session folders when building workspace set (they're temporary storage, not real bookmarks)
-  if (skipSession && node.title === '.session') return;
+  // Skip .session and .closed folders when building workspace set (they're internal bookkeeping)
+  if (skipSession && (node.title === '.session' || node.title === '.closed')) return;
 
   if (node.url) {
     targetSet.add(normalizeUrl(node.url));
@@ -1238,7 +1377,7 @@ function buildBookmarkUrlSet(node, targetSet, skipSession = false) {
 
 // Collect locations for each bookmark URL
 function collectBookmarkLocations(node, parentInfo) {
-  if (node.title === '.session') return;
+  if (node.title === '.session' || node.title === '.closed') return;
 
   const currentInfo = {
     id: node.id,
@@ -1265,8 +1404,8 @@ function renderBookmarks(bookmarks, parentElement = null, level = 0, parentColla
   if (!parentElement) container.innerHTML = '';
 
   bookmarks.forEach(bookmark => {
-    // Hide .session folders (internal bookkeeping)
-    if (bookmark.title === '.session') return;
+    // Hide .session and .closed folders (internal bookkeeping)
+    if (bookmark.title === '.session' || bookmark.title === '.closed') return;
 
     const isCollapsed = collapsedFolders.has(bookmark.id);
     const shouldHide = parentCollapsed;

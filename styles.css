@@ -699,3 +699,17 @@ body {
 .actions button.has-note:hover {
   background: rgba(114, 137, 218, 0.15);
 }
+
+/* Closed tabs button */
+.closed-tabs-btn {
+  position: relative;
+}
+
+.closed-tabs-btn.hidden {
+  display: none;
+}
+
+.closed-tabs-btn .count {
+  font-size: 9px;
+  margin-left: 2px;
+}
