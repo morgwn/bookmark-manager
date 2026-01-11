@@ -430,6 +430,13 @@ body {
   border-left: 2px solid #5865f2;
 }
 
+.active-tabs-list.drag-over {
+  background: rgba(88, 101, 242, 0.1) !important;
+  border-left: none;
+  outline: 2px dashed #5865f2;
+  outline-offset: -2px;
+}
+
 /* Empty state */
 .no-results {
   text-align: center;

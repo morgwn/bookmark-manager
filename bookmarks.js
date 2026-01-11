@@ -145,6 +145,28 @@ function setupEventListeners() {
   document.getElementById('closeWorkspaceBtn').addEventListener('click', deactivateWorkspace);
 
   document.getElementById('sortTabsBtn').addEventListener('click', sortTabsByWebsite);
+
+  // Active tabs panel accepts bookmark drops (for "past the end" drops)
+  const activeTabsList = document.getElementById('activeTabsList');
+  activeTabsList.addEventListener('dragover', (e) => {
+    if (e.dataTransfer.types.includes('bookmark-url') && !e.target.closest('.tab-item')) {
+      e.preventDefault();
+      activeTabsList.classList.add('drag-over');
+    }
+  });
+  activeTabsList.addEventListener('dragleave', (e) => {
+    if (!activeTabsList.contains(e.relatedTarget)) {
+      activeTabsList.classList.remove('drag-over');
+    }
+  });
+  activeTabsList.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    activeTabsList.classList.remove('drag-over');
+    const bookmarkUrl = e.dataTransfer.getData('bookmark-url');
+    if (bookmarkUrl) {
+      await chrome.tabs.create({ url: bookmarkUrl, active: false });
+    }
+  });
 }
 
 function setupModalListeners() {
@@ -703,18 +725,23 @@ function renderActiveTabs() {
       draggedTabId = tab.id;
       item.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('tab-id', tab.id);
+      e.dataTransfer.setData('tab-url', tab.url);
+      e.dataTransfer.setData('tab-title', tab.title || tab.url);
     });
 
     item.addEventListener('dragend', () => {
       item.classList.remove('dragging');
       draggedTabId = null;
-      // Clear all drag-over states
-      container.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      // Clear all drag-over states (both panels)
+      document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
     });
 
     item.addEventListener('dragover', (e) => {
       e.preventDefault();
-      if (draggedTabId && draggedTabId !== tab.id) {
+      const isTabReorder = draggedTabId && draggedTabId !== tab.id;
+      const isBookmarkDrop = e.dataTransfer.types.includes('bookmark-url');
+      if (isTabReorder || isBookmarkDrop) {
         item.classList.add('drag-over');
       }
     });
@@ -725,9 +752,18 @@ function renderActiveTabs() {
 
     item.addEventListener('drop', async (e) => {
       e.preventDefault();
+      e.stopPropagation();
       item.classList.remove('drag-over');
+
+      // Bookmark drop - open as new tab at this position
+      const bookmarkUrl = e.dataTransfer.getData('bookmark-url');
+      if (bookmarkUrl) {
+        await chrome.tabs.create({ url: bookmarkUrl, index: tab.index, active: false });
+        return;
+      }
+
+      // Tab reorder
       if (draggedTabId && draggedTabId !== tab.id) {
-        // Move the dragged tab to this position
         await chrome.tabs.move(draggedTabId, { index: tab.index });
       }
     });
@@ -830,6 +866,8 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   div.dataset.id = bookmark.id;
   div.dataset.parentId = bookmark.parentId;
   div.dataset.index = bookmark.index;
+  div.dataset.url = bookmark.url || '';
+  div.dataset.title = displayTitle;
   div.draggable = true;
 
   if (shouldHide) {
@@ -1076,6 +1114,12 @@ function handleDragStart(e) {
   };
   draggedElement.classList.add('dragging');
   e.dataTransfer.effectAllowed = 'move';
+
+  // Set data for dropping onto active tabs panel
+  if (draggedElement.dataset.url) {
+    e.dataTransfer.setData('bookmark-url', draggedElement.dataset.url);
+    e.dataTransfer.setData('bookmark-title', draggedElement.dataset.title);
+  }
 }
 
 function handleDragEnd(e) {
@@ -1105,11 +1149,36 @@ function handleDrop(e) {
   e.stopPropagation();
 
   const dropTarget = e.target.closest('.bookmark-folder, .bookmark-item');
-  if (!dropTarget || !draggedElement || dropTarget === draggedElement) {
+  if (!dropTarget) return;
+
+  dropTarget.classList.remove('drag-over');
+
+  // Check if this is a tab being dropped (to create bookmark)
+  const tabUrl = e.dataTransfer.getData('tab-url');
+  if (tabUrl) {
+    const tabTitle = e.dataTransfer.getData('tab-title');
+    const isFolder = dropTarget.classList.contains('bookmark-folder');
+
+    const createOptions = {
+      parentId: isFolder ? dropTarget.dataset.id : dropTarget.dataset.parentId,
+      title: tabTitle,
+      url: tabUrl
+    };
+
+    // If dropping on a bookmark, insert at that position
+    if (!isFolder) {
+      createOptions.index = parseInt(dropTarget.dataset.index);
+    }
+
+    chrome.bookmarks.create(createOptions, async () => {
+      await loadOpenTabs();
+      applyCurrentFilters();
+    });
     return;
   }
 
-  dropTarget.classList.remove('drag-over');
+  // Otherwise, it's a bookmark being reordered
+  if (!draggedElement || dropTarget === draggedElement) return;
 
   const targetId = dropTarget.dataset.id;
   const targetParentId = dropTarget.dataset.parentId;
