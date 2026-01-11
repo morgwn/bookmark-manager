@@ -512,7 +512,7 @@ function normalizeUrl(url) {
     normalized = normalized.replace(/^https?:\/\//, '');
     normalized = normalized.replace(/^www\./, '');
     normalized = normalized.replace(/\/$/, '');
-    normalized = normalized.split('?')[0].split('#')[0];
+    normalized = normalized.split('#')[0]; // keep query params, strip only hash
     return normalized;
   } catch (e) {
     return url;
