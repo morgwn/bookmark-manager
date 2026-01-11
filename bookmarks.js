@@ -85,11 +85,23 @@ async function toggleStarred(bookmarkId, currentTitle) {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
   try {
-    activeWorkspaceFolder = await WorkspaceManager.getActiveWorkspaceFolder();
-    updateWorkspaceUI();
-    await loadOpenTabs();
-    await loadBookmarks();
-    renderActiveTabs();
+    // Check for workspace param (from shift+dblclick new window)
+    const urlParams = new URLSearchParams(window.location.search);
+    const workspaceParam = urlParams.get('workspace');
+
+    if (workspaceParam) {
+      // Clear the URL param so refresh doesn't re-trigger
+      history.replaceState({}, '', window.location.pathname);
+      // Activate the workspace
+      await activateWorkspace(workspaceParam);
+    } else {
+      activeWorkspaceFolder = await WorkspaceManager.getActiveWorkspaceFolder();
+      updateWorkspaceUI();
+      await loadOpenTabs();
+      await loadBookmarks();
+      renderActiveTabs();
+    }
+
     setupEventListeners();
     setupModalListeners();
     setupTabListeners();
@@ -110,6 +122,7 @@ function setupEventListeners() {
     document.getElementById('searchInput').value = '';
     await loadBookmarks();
     renderActiveTabs();
+    renderWorkspaceSidebar();
   });
 
   document.getElementById('starFilterBtn').addEventListener('click', toggleStarFilter);
@@ -389,7 +402,13 @@ function drawConnectionsFromTab(tabUrl) {
   });
 }
 
-function setupTabListeners() { // Debounce fix
+// TODO: Filter tab events by windowId for multi-window efficiency
+// Currently all windows respond to all tab events. To fix:
+// 1. Store currentWindowId in DOMContentLoaded
+// 2. Check tab.windowId === currentWindowId before calling scheduleReload
+// 3. For onRemoved: use removeInfo.windowId
+// 4. For onDetached/onAttached: use detachInfo.oldWindowId / attachInfo.newWindowId
+function setupTabListeners() {
   const scheduleReload = () => {
     // Cancel any pending reload
     if (reloadTimeout) {
@@ -511,10 +530,11 @@ async function toggleWorkspace() {
   await chrome.bookmarks.update(bookmarkId, { title: newTitle });
   closeWorkspaceModal();
   applyCurrentFilters();
+  renderWorkspaceSidebar();
 }
 
 //------------------------------------------
-// Workspace Activation UI
+// Workspace Sidebar & UI
 //------------------------------------------
 function updateWorkspaceUI() {
   const closeBtn = document.getElementById('closeWorkspaceBtn');
@@ -527,6 +547,66 @@ function updateWorkspaceUI() {
     closeBtn.classList.add('hidden');
     rightPanel.classList.add('hidden');
   }
+
+  renderWorkspaceSidebar();
+}
+
+// Find all workspace folders in tree order
+function findWorkspaces(node, results = []) {
+  if (node.children) {
+    for (const child of node.children) {
+      if (child.children) {
+        const { metadata } = FilterSystem.parseTitle(child.title);
+        if (metadata.workspace) {
+          const { displayTitle } = FilterSystem.parseTitle(child.title);
+          results.push({ id: child.id, title: displayTitle });
+        }
+        findWorkspaces(child, results);
+      }
+    }
+  }
+  return results;
+}
+
+async function renderWorkspaceSidebar() {
+  const container = document.getElementById('workspaceSidebar');
+  container.innerHTML = '';
+
+  // "All Bookmarks" item at top
+  const allItem = document.createElement('div');
+  allItem.className = 'workspace-item all-bookmarks';
+  if (!activeWorkspaceFolder) {
+    allItem.classList.add('active');
+  }
+  allItem.textContent = '📚 All Bookmarks';
+  allItem.ondblclick = () => {
+    if (activeWorkspaceFolder) {
+      deactivateWorkspace();
+    }
+  };
+  container.appendChild(allItem);
+
+  // Find and render workspaces
+  const tree = await chrome.bookmarks.getTree();
+  const workspaces = findWorkspaces(tree[0]);
+
+  workspaces.forEach(ws => {
+    const item = document.createElement('div');
+    item.className = 'workspace-item';
+    if (activeWorkspaceFolder && activeWorkspaceFolder.id === ws.id) {
+      item.classList.add('active');
+    }
+    item.textContent = '🗂️ ' + ws.title;
+    item.title = ws.title;
+    item.ondblclick = (e) => {
+      if (e.shiftKey) {
+        openWorkspaceInNewWindow(ws.id);
+      } else {
+        activateWorkspace(ws.id);
+      }
+    };
+    container.appendChild(item);
+  });
 }
 
 function showLooseTabsModal(tabCount) {
@@ -578,6 +658,18 @@ async function deactivateWorkspace() {
     }
   });
   return success;
+}
+
+async function openWorkspaceInNewWindow(workspaceId) {
+  const extensionUrl = chrome.runtime.getURL('bookmarks.html');
+  const newWindow = await chrome.windows.create({
+    url: `${extensionUrl}?workspace=${workspaceId}`,
+    focused: true
+  });
+  // Pin the GoldenTab
+  if (newWindow.tabs && newWindow.tabs[0]) {
+    await chrome.tabs.update(newWindow.tabs[0].id, { pinned: true });
+  }
 }
 
 // Tab management
