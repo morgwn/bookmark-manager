@@ -13,6 +13,7 @@ let looseTabsResolve = null; // For loose tabs modal promise
 let orderedTabs = []; // Tabs in browser order for Active Tabs folder
 let allBookmarkUrls = new Set(); // All bookmark URLs for indicator dots
 let workspaceBookmarkUrls = new Set(); // URLs in current workspace (for bright dot)
+let bookmarkUrlLocations = new Map(); // URL → [{id, title, parentId, parentTitle}] (for multi-location indicator)
 let connectionSvg = null; // SVG overlay for drawing connection lines
 let pendingBookmarkTabs = new Map(); // Track tabs opened from bookmarks: tabId → originalUrl
 let redirectedTabs = new Map(); // Tabs that redirected: tabId → originalUrl
@@ -1138,7 +1139,9 @@ async function loadBookmarks() {
     // Build full bookmark URL set for "external" indicator (dim dot)
     const fullTree = await chrome.bookmarks.getTree();
     allBookmarkUrls = new Set();
+    bookmarkUrlLocations = new Map();
     buildBookmarkUrlSet(fullTree[0], allBookmarkUrls, true);
+    collectBookmarkLocations(fullTree[0], {});
 
     workspaceBookmarkUrls = new Set();
 
@@ -1166,6 +1169,30 @@ function buildBookmarkUrlSet(node, targetSet, skipSession = false) {
   }
   if (node.children) {
     node.children.forEach(child => buildBookmarkUrlSet(child, targetSet, skipSession));
+  }
+}
+
+// Collect locations for each bookmark URL
+function collectBookmarkLocations(node, parentInfo) {
+  if (node.title === '.session') return;
+
+  const currentInfo = {
+    id: node.id,
+    title: node.title,
+    parentId: parentInfo.id || null,
+    parentTitle: parentInfo.title || 'Root'
+  };
+
+  if (node.url) {
+    const normalized = normalizeUrl(node.url);
+    if (!bookmarkUrlLocations.has(normalized)) {
+      bookmarkUrlLocations.set(normalized, []);
+    }
+    bookmarkUrlLocations.get(normalized).push(currentInfo);
+  }
+
+  if (node.children) {
+    node.children.forEach(child => collectBookmarkLocations(child, currentInfo));
   }
 }
 
@@ -1327,6 +1354,41 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     workspaceIndicator.textContent = '🗂️';
     workspaceIndicator.title = 'Workspace';
     content.appendChild(workspaceIndicator);
+  }
+
+  // Multi-location indicator (bookmark exists in multiple places)
+  if (!bookmark.children && bookmark.url) {
+    const normalized = normalizeUrl(bookmark.url);
+    const locations = bookmarkUrlLocations.get(normalized) || [];
+    if (locations.length > 1) {
+      const multiIndicator = document.createElement('span');
+      multiIndicator.className = 'multi-location-indicator';
+      multiIndicator.textContent = `×${locations.length}`;
+      multiIndicator.title = `Bookmarked in ${locations.length} locations (click to see)`;
+      multiIndicator.onclick = (e) => {
+        e.stopPropagation();
+        const items = locations.map(loc => ({
+          label: `📁 ${loc.parentTitle}`,
+          action: () => {
+            // Expand and scroll to the bookmark
+            if (loc.parentId) {
+              collapsedFolders.delete(loc.parentId);
+              applyCurrentFilters();
+              setTimeout(() => {
+                const el = document.querySelector(`.bookmark-item[data-id="${loc.id}"]`);
+                if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  el.classList.add('highlight');
+                  setTimeout(() => el.classList.remove('highlight'), 4000);
+                }
+              }, 100);
+            }
+          }
+        }));
+        ContextMenu.show(e.clientX, e.clientY, items);
+      };
+      content.appendChild(multiIndicator);
+    }
   }
 
   // URL display for bookmarks

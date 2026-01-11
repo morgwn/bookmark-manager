@@ -437,6 +437,29 @@ body {
   margin-right: 8px;
 }
 
+/* Multi-location indicator (bookmark exists in multiple places) */
+.multi-location-indicator {
+  font-size: 10px;
+  color: #8b8d94;
+  background: #2d3139;
+  padding: 1px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  margin-right: 8px;
+  cursor: pointer;
+}
+
+.multi-location-indicator:hover {
+  background: #3a3f4b;
+  color: #e4e6eb;
+}
+
+/* Highlight effect for scroll-to-bookmark */
+.bookmark-item.highlight {
+  background: rgba(88, 101, 242, 0.3);
+  transition: background 0.3s;
+}
+
 /* Starred button state */
 .actions button.starred {
   color: #ffc107;
