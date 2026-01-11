@@ -105,6 +105,24 @@ body {
   border-color: #ffc107;
 }
 
+#companionBtn {
+  background: transparent;
+  border: 1px solid #3a3f4b;
+  color: #8b8d94;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+#companionBtn:hover {
+  background: #353a45;
+  color: #5865f2;
+  border-color: #5865f2;
+}
+
 .close-workspace-btn {
   background: transparent;
   border: 1px solid #3a3f4b;

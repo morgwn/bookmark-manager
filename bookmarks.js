@@ -18,8 +18,12 @@ let pendingNoteData = null; // For note modal: {id, title, displayTitle, metadat
 let connectionSvg = null; // SVG overlay for drawing connection lines
 const CLOSED_FOLDER_NAME = '.closed';
 const MAX_CLOSED_TABS = 20;
+const COMPANION_MODE = 'sidepanel'; // 'floating', 'sidepanel', or 'none'
 let pendingBookmarkTabs = new Map(); // Track tabs opened from bookmarks: tabId → originalUrl
 let redirectedTabs = new Map(); // Tabs that redirected: tabId → originalUrl
+let floatingWindowId = null; // Track floating window for repositioning
+let mainWindowId = null; // Track main window to follow
+let currentWindowId = null; // This window's ID for per-window workspace storage
 
 //------------------------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -89,6 +93,10 @@ async function toggleStarred(bookmarkId, currentTitle) {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
   try {
+    // Get current window ID for per-window workspace storage
+    const win = await chrome.windows.getCurrent();
+    currentWindowId = win.id;
+
     // Check for workspace param (from shift+dblclick new window)
     const urlParams = new URLSearchParams(window.location.search);
     const workspaceParam = urlParams.get('workspace');
@@ -143,6 +151,23 @@ function setupEventListeners() {
   document.getElementById('dedupTabsBtn').addEventListener('mouseenter', previewDuplicateTabs);
   document.getElementById('dedupTabsBtn').addEventListener('mouseleave', clearDuplicatePreview);
   document.getElementById('closedTabsBtn').addEventListener('click', showClosedTabsMenu);
+  const companionBtn = document.getElementById('companionBtn');
+  if (COMPANION_MODE === 'none') {
+    companionBtn.style.display = 'none';
+  } else {
+    companionBtn.addEventListener('click', openCompanionPanel);
+    companionBtn.textContent = COMPANION_MODE === 'floating' ? '▢' : '◧';
+    companionBtn.title = COMPANION_MODE === 'floating' ? 'Open Floating Window' : 'Open Side Panel';
+  }
+
+  // Listen for workspace changes from side panel
+  chrome.storage.onChanged.addListener(handleStorageChange);
+
+  // Track floating window position relative to main window (only if using floating mode)
+  if (COMPANION_MODE === 'floating') {
+    chrome.windows.onBoundsChanged.addListener(handleWindowBoundsChanged);
+    chrome.windows.onRemoved.addListener(handleWindowRemoved);
+  }
 
   // Active tabs panel accepts bookmark drops (for "past the end" drops)
   const activeTabsList = document.getElementById('activeTabsList');
@@ -639,15 +664,19 @@ async function addClosedTab(workspaceId, url, title) {
   });
 
   // Prune old items if over limit
-  const children = await chrome.bookmarks.getChildren(folderId);
-  if (children.length > MAX_CLOSED_TABS) {
-    // Sort by dateAdded, remove oldest
-    const sorted = children.sort((a, b) => a.dateAdded - b.dateAdded);
-    const toRemove = sorted.slice(0, children.length - MAX_CLOSED_TABS);
-    for (const item of toRemove) {
-      await chrome.bookmarks.remove(item.id);
+  try {
+    const children = await chrome.bookmarks.getChildren(folderId);
+    if (children.length > MAX_CLOSED_TABS) {
+      // Sort by dateAdded, remove oldest
+      const sorted = children.sort((a, b) => a.dateAdded - b.dateAdded);
+      const toRemove = sorted.slice(0, children.length - MAX_CLOSED_TABS);
+      for (const item of toRemove) {
+        try {
+          await chrome.bookmarks.remove(item.id);
+        } catch (e) {} // Bookmark may already be removed
+      }
     }
-  }
+  } catch (e) {} // Folder may not exist
 
   updateClosedTabsButton();
 }
@@ -836,6 +865,8 @@ async function activateWorkspace(workspaceId) {
     onLooseTabsPrompt: (tabCount) => showLooseTabsModal(tabCount),
     onComplete: async () => {
       activeWorkspaceFolder = await WorkspaceManager.getActiveWorkspaceFolder();
+      // Sync to storage for side panel (per-window)
+      await chrome.storage.local.set({ [`activeWorkspaceId_${currentWindowId}`]: workspaceId });
       updateWorkspaceUI();
       await loadOpenTabs();
       await loadBookmarks();
@@ -852,6 +883,8 @@ async function deactivateWorkspace() {
   const success = await WorkspaceManager.deactivate({
     onComplete: async () => {
       activeWorkspaceFolder = null;
+      // Sync to storage for side panel (per-window)
+      await chrome.storage.local.set({ [`activeWorkspaceId_${currentWindowId}`]: null });
       updateWorkspaceUI();
       await loadOpenTabs();
       await loadBookmarks();
@@ -876,6 +909,99 @@ async function openWorkspaceInNewWindow(workspaceId) {
   }
 }
 
+// Companion panel (side panel or floating window based on config)
+async function openCompanionPanel() {
+  if (COMPANION_MODE === 'floating') {
+    await openFloatingWindow();
+  } else if (COMPANION_MODE === 'sidepanel') {
+    await chrome.sidePanel.open({ windowId: (await chrome.windows.getCurrent()).id });
+  }
+}
+
+async function openFloatingWindow() {
+  // Close existing floating window if any
+  if (floatingWindowId) {
+    try {
+      await chrome.windows.remove(floatingWindowId);
+    } catch (e) {} // Window may already be closed
+  }
+
+  const currentWindow = await chrome.windows.getCurrent();
+  mainWindowId = currentWindow.id;
+
+  const floatingWindow = await chrome.windows.create({
+    url: `sidepanel.html?windowId=${currentWindow.id}`,
+    type: 'popup',
+    width: 200,
+    height: currentWindow.height,
+    left: Math.max(0, currentWindow.left - 200 - 5),
+    top: currentWindow.top
+  });
+
+  floatingWindowId = floatingWindow.id;
+}
+
+async function handleWindowBoundsChanged(window) {
+  // Only respond to main window changes
+  if (window.id !== mainWindowId || !floatingWindowId) return;
+
+  try {
+    // Reposition floating window to stay next to main window (left side)
+    await chrome.windows.update(floatingWindowId, {
+      left: Math.max(0, window.left - 200 - 5),
+      top: window.top,
+      height: window.height
+    });
+  } catch (e) {
+    // Floating window may have been closed
+    floatingWindowId = null;
+  }
+}
+
+function handleWindowRemoved(windowId) {
+  if (windowId === floatingWindowId) {
+    floatingWindowId = null;
+  }
+}
+
+async function handleStorageChange(changes, area) {
+  const storageKey = `activeWorkspaceId_${currentWindowId}`;
+  if (area !== 'local' || !changes[storageKey]) return;
+
+  const newWorkspaceId = changes[storageKey].newValue;
+  const currentWorkspaceId = activeWorkspaceFolder?.id || null;
+
+  // Ignore if already on this workspace
+  if (newWorkspaceId === currentWorkspaceId) return;
+
+  if (newWorkspaceId) {
+    // Switch to workspace (skip the storage.set since it came from storage)
+    const success = await WorkspaceManager.activate(newWorkspaceId, {
+      onLooseTabsPrompt: () => Promise.resolve('bringIn'), // Auto bring in tabs
+      onComplete: async () => {
+        activeWorkspaceFolder = await WorkspaceManager.getActiveWorkspaceFolder();
+        updateWorkspaceUI();
+        await loadOpenTabs();
+        await loadBookmarks();
+        renderActiveTabs();
+      },
+      onError: () => {} // Silently fail
+    });
+  } else {
+    // Deactivate workspace
+    await WorkspaceManager.deactivate({
+      onComplete: async () => {
+        activeWorkspaceFolder = null;
+        updateWorkspaceUI();
+        await loadOpenTabs();
+        await loadBookmarks();
+        renderActiveTabs();
+      },
+      onError: () => {}
+    });
+  }
+}
+
 // Tab management
 async function loadOpenTabs() {
   const window = await chrome.windows.getCurrent();
@@ -885,14 +1011,16 @@ async function loadOpenTabs() {
 
   const extensionUrl = chrome.runtime.getURL('bookmarks.html');
 
-  // Store ordered tabs for Active Tabs folder (exclude bookmark manager and chrome:// pages)
+  // Store ordered tabs for Active Tabs folder (exclude bookmark manager, chrome://, and empty URLs)
   orderedTabs = tabs.filter(tab =>
+    tab.url &&
     !tab.url.startsWith('chrome://') &&
     !tab.url.startsWith('chrome-extension://') &&
     tab.url !== extensionUrl
   );
 
   tabs.forEach(tab => {
+    if (!tab.url) return;
     const normalized = normalizeUrl(tab.url);
     openTabUrls.add(normalized);
     if (!openTabsMap.has(normalized)) {

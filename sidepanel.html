@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>GoldenTab</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
+      background: #1a1d23;
+      color: #e4e6eb;
+      font-size: 13px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .section {
+      display: flex;
+      flex-direction: column;
+      border-bottom: 1px solid #2d3139;
+    }
+    .section-header {
+      padding: 10px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #8b8d94;
+      background: #1e2127;
+      border-bottom: 1px solid #2d3139;
+    }
+    .section-content {
+      flex: 1;
+      overflow-y: auto;
+    }
+    .workspaces-section {
+      flex: 0 0 auto;
+      max-height: 40%;
+    }
+    .tabs-section {
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* Workspace items */
+    .workspace-item {
+      padding: 8px 12px;
+      font-size: 12px;
+      color: #b9bbbe;
+      cursor: pointer;
+      border-bottom: 1px solid #2d3139;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.15s;
+    }
+    .workspace-item:hover {
+      background: #2d3139;
+      color: #e4e6eb;
+    }
+    .workspace-item.active {
+      background: rgba(88, 101, 242, 0.15);
+      color: #5865f2;
+      border-left: 2px solid #5865f2;
+    }
+    .workspace-item.all-bookmarks {
+      font-weight: 600;
+      color: #e4e6eb;
+    }
+
+    /* Tab items */
+    .tab-item {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      gap: 8px;
+      border-bottom: 1px solid #2d3139;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .tab-item:hover {
+      background: #23272f;
+    }
+    .tab-item .favicon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+    .tab-item .tab-title {
+      flex: 1;
+      font-size: 12px;
+      color: #b9bbbe;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tab-item:hover .tab-title {
+      color: #e4e6eb;
+    }
+    .tab-item.active {
+      background: rgba(88, 101, 242, 0.15);
+      border-left: 2px solid #5865f2;
+    }
+    .tab-item.active .tab-title {
+      color: #5865f2;
+    }
+
+    /* Empty state */
+    .empty {
+      padding: 20px 12px;
+      color: #8b8d94;
+      font-size: 12px;
+      text-align: center;
+    }
+
+    /* Open main button */
+    .open-main-btn {
+      padding: 10px 12px;
+      background: #23272f;
+      border: none;
+      border-top: 1px solid #2d3139;
+      color: #8b8d94;
+      font-size: 11px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.15s;
+    }
+    .open-main-btn:hover {
+      background: #2d3139;
+      color: #e4e6eb;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #1a1d23;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #3a3f4b;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #4a4f5b;
+    }
+  </style>
+</head>
+<body>
+  <div class="section workspaces-section">
+    <div class="section-header">Workspaces</div>
+    <div id="workspaceList" class="section-content"></div>
+  </div>
+  <div class="section tabs-section">
+    <div class="section-header">Active Tabs</div>
+    <div id="tabList" class="section-content"></div>
+  </div>
+  <button id="openMainBtn" class="open-main-btn">Open Bookmark Manager</button>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
