@@ -177,6 +177,11 @@ body {
   border-color: #5865f2;
 }
 
+.panel-header-buttons {
+  display: flex;
+  gap: 4px;
+}
+
 .left-panel {
   flex: 1;
 }
@@ -251,6 +256,10 @@ body {
   background: #353a45;
   color: #ff6b6b;
   border-color: #ff6b6b;
+}
+
+.tab-item.will-close {
+  opacity: 0.3;
 }
 
 /* Bookmark indicator on tabs */

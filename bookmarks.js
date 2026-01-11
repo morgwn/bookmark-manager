@@ -149,6 +149,9 @@ function setupEventListeners() {
   document.getElementById('closeWorkspaceBtn').addEventListener('click', deactivateWorkspace);
 
   document.getElementById('sortTabsBtn').addEventListener('click', sortTabsByWebsite);
+  document.getElementById('dedupTabsBtn').addEventListener('click', closeDuplicateTabs);
+  document.getElementById('dedupTabsBtn').addEventListener('mouseenter', previewDuplicateTabs);
+  document.getElementById('dedupTabsBtn').addEventListener('mouseleave', clearDuplicatePreview);
 
   // Active tabs panel accepts bookmark drops (for "past the end" drops)
   const activeTabsList = document.getElementById('activeTabsList');
@@ -650,6 +653,42 @@ async function sortTabsByWebsite() {
   for (let i = 0; i < sorted.length; i++) {
     await chrome.tabs.move(sorted[i].id, { index: i });
   }
+}
+
+function findDuplicateTabIds() {
+  const seen = new Map();
+  const duplicates = [];
+
+  orderedTabs.forEach(tab => {
+    const normalized = normalizeUrl(tab.url);
+    if (seen.has(normalized)) {
+      duplicates.push(tab.id); // duplicate
+    } else {
+      seen.set(normalized, tab.id); // first occurrence
+    }
+  });
+
+  return duplicates;
+}
+
+async function closeDuplicateTabs() {
+  const toClose = findDuplicateTabIds();
+  if (toClose.length === 0) return;
+  await chrome.tabs.remove(toClose);
+}
+
+function previewDuplicateTabs() {
+  const duplicates = findDuplicateTabIds();
+  duplicates.forEach(tabId => {
+    const el = document.querySelector(`.tab-item[data-tab-id="${tabId}"]`);
+    if (el) el.classList.add('will-close');
+  });
+}
+
+function clearDuplicatePreview() {
+  document.querySelectorAll('.tab-item.will-close').forEach(el => {
+    el.classList.remove('will-close');
+  });
 }
 
 function normalizeUrl(url) {
