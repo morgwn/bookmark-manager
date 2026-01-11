@@ -14,6 +14,8 @@ let orderedTabs = []; // Tabs in browser order for Active Tabs folder
 let allBookmarkUrls = new Set(); // All bookmark URLs for indicator dots
 let workspaceBookmarkUrls = new Set(); // URLs in current workspace (for bright dot)
 let connectionSvg = null; // SVG overlay for drawing connection lines
+let pendingBookmarkTabs = new Map(); // Track tabs opened from bookmarks: tabId → originalUrl
+let redirectedTabs = new Map(); // Tabs that redirected: tabId → originalUrl
 
 //------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -103,24 +105,16 @@ document.getElementById('searchInput').addEventListener('keydown', (e) => {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
-  console.log('DOMContentLoaded starting...');
   try {
-    // Check if we're already in a workspace
     activeWorkspaceFolder = await WorkspaceManager.getActiveWorkspaceFolder();
-    console.log('activeWorkspaceFolder:', activeWorkspaceFolder);
     updateWorkspaceUI();
-
     await loadOpenTabs();
-    console.log('loadOpenTabs done, orderedTabs:', orderedTabs.length);
     await loadBookmarks();
-    console.log('loadBookmarks done');
     renderActiveTabs();
-    console.log('renderActiveTabs done');
     setupEventListeners();
     setupModalListeners();
     setupTabListeners();
     setupConnectionLines();
-    console.log('DOMContentLoaded complete');
   } catch (error) {
     console.error('DOMContentLoaded error:', error);
   }
@@ -171,7 +165,7 @@ function setupEventListeners() {
     activeTabsList.classList.remove('drag-over');
     const bookmarkUrl = e.dataTransfer.getData('bookmark-url');
     if (bookmarkUrl) {
-      await chrome.tabs.create({ url: bookmarkUrl, active: false });
+      await openBookmarkUrl(bookmarkUrl, false);
     }
   });
 }
@@ -436,8 +430,25 @@ function setupTabListeners() {
 
   // Tab events
   chrome.tabs.onCreated.addListener(scheduleReload);
-  chrome.tabs.onUpdated.addListener(scheduleReload);
-  chrome.tabs.onRemoved.addListener(scheduleReload);
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    scheduleReload();
+    // Check for redirects on tabs opened from bookmarks
+    if (pendingBookmarkTabs.has(tabId) && (changeInfo.url || changeInfo.status === 'complete')) {
+      const originalUrl = pendingBookmarkTabs.get(tabId);
+      const currentUrl = normalizeUrl(tab.url);
+      if (originalUrl !== currentUrl) {
+        redirectedTabs.set(tabId, originalUrl);
+        pendingBookmarkTabs.delete(tabId);
+      } else if (changeInfo.status === 'complete') {
+        pendingBookmarkTabs.delete(tabId);
+      }
+    }
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    scheduleReload();
+    pendingBookmarkTabs.delete(tabId);
+    redirectedTabs.delete(tabId);
+  });
   chrome.tabs.onMoved.addListener(scheduleReload);
   chrome.tabs.onDetached.addListener(scheduleReload);
   chrome.tabs.onAttached.addListener(scheduleReload);
@@ -448,25 +459,6 @@ function setupTabListeners() {
   chrome.bookmarks.onChanged.addListener(scheduleReload);
   chrome.bookmarks.onMoved.addListener(scheduleReload);
 }
-
-// function setupTabListeners() {
-//   chrome.tabs.onCreated.addListener(async () => {
-//     await loadOpenTabs();
-//     await loadBookmarks();
-//   });
-  
-//   chrome.tabs.onUpdated.addListener(async () => {
-//     await loadOpenTabs();
-//     await loadBookmarks();
-//   });
-  
-//   chrome.tabs.onRemoved.addListener(async () => {
-//     await loadOpenTabs();
-//     await loadBookmarks();
-//   });
-// }
-
-//------------------------------------
 
 // Modal functions
 function showModal(folderTitle) {
@@ -637,6 +629,14 @@ async function loadOpenTabs() {
   });
 }
 
+async function openBookmarkUrl(url, active = true, index = undefined) {
+  const options = { url, active };
+  if (index !== undefined) options.index = index;
+  const tab = await chrome.tabs.create(options);
+  pendingBookmarkTabs.set(tab.id, normalizeUrl(url));
+  return tab;
+}
+
 async function sortTabsByWebsite() {
   if (orderedTabs.length === 0) return;
 
@@ -773,41 +773,6 @@ async function closeFolderTabs(folderId, recursive) {
   }
 }
 
-// async function closeBookmarkTab(bookmarkUrl) {
-//   const tabIds = getMatchingTabIds(bookmarkUrl);
-//   if (tabIds.length > 0) {
-//     await chrome.tabs.remove(tabIds);
-//     await loadOpenTabs();
-//     await loadBookmarks();
-//   }
-// }
-
-// async function closeFolderTabs(folderId, recursive) {
-//   try {
-//     const bookmark = await chrome.bookmarks.getSubTree(folderId);
-//     const urls = collectBookmarkUrls(bookmark[0], recursive, 0);
-    
-//     const tabIds = [];
-//     for (let url of urls) {
-//       const ids = getMatchingTabIds(url);
-//       tabIds.push(...ids);
-//     }
-    
-//     if (tabIds.length > 0) {
-//       await chrome.tabs.remove(tabIds);
-//       await loadOpenTabs();
-//       await loadBookmarks();
-//     } else {
-//       alert('No open tabs found for this folder');
-//     }
-//   } catch (error) {
-//     console.error('Error closing folder tabs:', error);
-//     alert('Error: ' + error.message);
-//   }
-// }
-
-//-----------------------------------------
-
 // Bookmark operations
 function collectBookmarkUrls(bookmark, recursive, depth) {
   let urls = [];
@@ -880,9 +845,9 @@ async function openFolderBookmarks(folderId, recursive) {
   try {
     const bookmark = await chrome.bookmarks.getSubTree(folderId);
     const urls = collectBookmarkUrls(bookmark[0], recursive, 0);
-    
+
     for (let url of urls) {
-      await chrome.tabs.create({ url: url, active: false });
+      await openBookmarkUrl(url, false);
     }
   } catch (error) {
     console.error('Error opening folder bookmarks:', error);
@@ -894,9 +859,7 @@ async function openFolderBookmarks(folderId, recursive) {
 let draggedTabId = null;
 
 function renderActiveTabs() {
-  console.log('renderActiveTabs called, orderedTabs:', orderedTabs.length);
   const container = document.getElementById('activeTabsList');
-  console.log('activeTabsList container:', container);
   container.innerHTML = '';
 
   orderedTabs.forEach((tab, index) => {
@@ -944,7 +907,7 @@ function renderActiveTabs() {
       // Bookmark drop - open as new tab at this position
       const bookmarkUrl = e.dataTransfer.getData('bookmark-url');
       if (bookmarkUrl) {
-        await chrome.tabs.create({ url: bookmarkUrl, index: tab.index, active: false });
+        await openBookmarkUrl(bookmarkUrl, false, tab.index);
         return;
       }
 
@@ -974,6 +937,15 @@ function renderActiveTabs() {
       indicator.addEventListener('mouseenter', () => drawConnectionsFromTab(tab.url));
       indicator.addEventListener('mouseleave', clearConnections);
       item.appendChild(indicator);
+    }
+
+    // Redirect indicator (yellow arrow if bookmark redirected)
+    if (redirectedTabs.has(tab.id)) {
+      const redirectIcon = document.createElement('span');
+      redirectIcon.className = 'redirect-indicator';
+      redirectIcon.textContent = '↪';
+      redirectIcon.title = 'Redirected from bookmark';
+      item.appendChild(redirectIcon);
     }
 
     // Favicon
@@ -1012,27 +984,20 @@ function renderActiveTabs() {
 }
 
 async function loadBookmarks() {
-  console.log('loadBookmarks called, activeWorkspaceFolder:', activeWorkspaceFolder);
   try {
-    // Build full bookmark URL set (for "external" indicator - dim dot)
+    // Build full bookmark URL set for "external" indicator (dim dot)
     const fullTree = await chrome.bookmarks.getTree();
     allBookmarkUrls = new Set();
-    buildBookmarkUrlSet(fullTree[0], allBookmarkUrls);
+    buildBookmarkUrlSet(fullTree[0], allBookmarkUrls, true);
 
-    // Reset workspace set
     workspaceBookmarkUrls = new Set();
 
     if (activeWorkspaceFolder) {
-      // In workspace mode - also build workspace URL set (for "in workspace" indicator - bright dot)
-      // Pass skipSession=true to exclude .session folder (saved session tabs aren't "real" bookmarks)
-      console.log('Workspace mode, getting subtree for id:', activeWorkspaceFolder.id);
+      // Workspace mode - build workspace URL set for "in workspace" indicator (bright dot)
       const subtree = await chrome.bookmarks.getSubTree(activeWorkspaceFolder.id);
       buildBookmarkUrlSet(subtree[0], workspaceBookmarkUrls, true);
-      console.log('Got subtree:', subtree);
       renderBookmarks([subtree[0]]);
     } else {
-      // Normal mode - render all bookmarks
-      console.log('Normal mode, getting full tree');
       renderBookmarks(fullTree[0].children);
     }
   } catch (error) {
@@ -1055,9 +1020,7 @@ function buildBookmarkUrlSet(node, targetSet, skipSession = false) {
 }
 
 function renderBookmarks(bookmarks, parentElement = null, level = 0, parentCollapsed = false) {
-  console.log('renderBookmarks called, bookmarks:', bookmarks, 'level:', level);
   const container = parentElement || document.getElementById('bookmarkTree');
-  console.log('container:', container);
   if (!parentElement) container.innerHTML = '';
 
   bookmarks.forEach(bookmark => {
@@ -1101,9 +1064,9 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
 
   // Double-click handlers
   if (!bookmark.children && bookmark.url) {
-    div.addEventListener('dblclick', (e) => {
+    div.addEventListener('dblclick', async (e) => {
       e.stopPropagation();
-      chrome.tabs.create({ url: bookmark.url, active: !e.shiftKey });
+      await openBookmarkUrl(bookmark.url, !e.shiftKey);
     });
   } else if (bookmark.children) {
     div.addEventListener('dblclick', async (e) => {
@@ -1257,9 +1220,9 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     const openBtn = document.createElement('button');
     openBtn.textContent = '↗';
     openBtn.title = 'Open (Shift+click for background)';
-    openBtn.onclick = (e) => {
+    openBtn.onclick = async (e) => {
       e.stopPropagation();
-      chrome.tabs.create({ url: bookmark.url, active: !e.shiftKey });
+      await openBookmarkUrl(bookmark.url, !e.shiftKey);
     };
     actions.appendChild(openBtn);
   } else {

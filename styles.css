@@ -262,6 +262,13 @@ body {
   opacity: 0.3;
 }
 
+.redirect-indicator {
+  color: #ffc107;
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
 /* Bookmark indicator on tabs */
 /* Bright dot = bookmarked in current workspace (safe to close) */
 .bookmark-indicator {
