@@ -13,6 +13,7 @@ let looseTabsResolve = null; // For loose tabs modal promise
 let orderedTabs = []; // Tabs in browser order for Active Tabs folder
 let allBookmarkUrls = new Set(); // All bookmark URLs for indicator dots
 let workspaceBookmarkUrls = new Set(); // URLs in current workspace (for bright dot)
+let connectionSvg = null; // SVG overlay for drawing connection lines
 
 //------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -118,6 +119,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     setupModalListeners();
     setupTabListeners();
+    setupConnectionLines();
     console.log('DOMContentLoaded complete');
   } catch (error) {
     console.error('DOMContentLoaded error:', error);
@@ -263,6 +265,82 @@ function setupModalListeners() {
       closeLooseTabsModal('cancel');
     }
   });
+}
+
+//------------------------------------
+// Connection lines (hover on folder to see lines to open tabs)
+
+function setupConnectionLines() {
+  connectionSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  connectionSvg.id = 'connectionLines';
+  connectionSvg.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:50';
+  document.body.appendChild(connectionSvg);
+}
+
+function drawConnections(folderId) {
+  if (!connectionSvg) return;
+  connectionSvg.innerHTML = '';
+
+  // Find all visible bookmark items that are children of this folder
+  const bookmarkItems = document.querySelectorAll(`.bookmark-item[data-parent-id="${folderId}"]`);
+
+  bookmarkItems.forEach(bookmark => {
+    // Skip if not visible (collapsed or hidden)
+    const rect = bookmark.getBoundingClientRect();
+    if (rect.height === 0 || rect.width === 0) return;
+
+    const url = bookmark.dataset.url;
+    if (!url) return;
+
+    const normalizedUrl = normalizeUrl(url);
+
+    // Find matching tab by comparing URLs stored in dataset
+    const matchingTab = [...document.querySelectorAll('.tab-item')].find(tab => {
+      const tabUrl = tab.querySelector('.tab-title')?.title;
+      return tabUrl && normalizeUrl(tabUrl) === normalizedUrl;
+    });
+
+    if (matchingTab) {
+      const from = rect;
+      const to = matchingTab.getBoundingClientRect();
+
+      // Skip if tab not visible
+      if (to.height === 0 || to.width === 0) return;
+
+      // Draw curved bezier line from bookmark's open-indicator area to tab's left edge
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const startX = from.left + 30; // near the open indicator dot
+      const startY = from.top + from.height / 2;
+      const endX = to.left;
+      const endY = to.top + to.height / 2;
+
+      // Control points for smooth S-curve
+      const controlOffset = Math.min(100, Math.abs(endX - startX) / 2);
+
+      path.setAttribute('d', `M${startX},${startY} C${startX + controlOffset},${startY} ${endX - controlOffset},${endY} ${endX},${endY}`);
+      path.setAttribute('stroke', '#ff6b35');
+      path.setAttribute('stroke-width', '2');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('opacity', '0.6');
+      connectionSvg.appendChild(path);
+
+      // Add small dots at endpoints
+      [{ x: startX, y: startY }, { x: endX, y: endY }].forEach(point => {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', point.x);
+        circle.setAttribute('cy', point.y);
+        circle.setAttribute('r', '4');
+        circle.setAttribute('fill', '#ff6b35');
+        connectionSvg.appendChild(circle);
+      });
+    }
+  });
+}
+
+function clearConnections() {
+  if (connectionSvg) {
+    connectionSvg.innerHTML = '';
+  }
 }
 
 //------------------------------------
@@ -959,6 +1037,10 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
         await openFolderBookmarks(bookmark.id, false);
       }
     });
+
+    // Hover to show connection lines to open tabs
+    div.addEventListener('mouseenter', () => drawConnections(bookmark.id));
+    div.addEventListener('mouseleave', clearConnections);
   }
 
   const content = document.createElement('div');
