@@ -1,5 +1,5 @@
 // State management
-let reloadTimeout = null; //mqm for debounce fix
+let reloadTimeout = null; // Debounce fix
 let draggedElement = null;
 let draggedBookmark = null;
 let collapsedFolders = new Set();
@@ -17,9 +17,9 @@ let connectionSvg = null; // SVG overlay for drawing connection lines
 let pendingBookmarkTabs = new Map(); // Track tabs opened from bookmarks: tabId → originalUrl
 let redirectedTabs = new Map(); // Tabs that redirected: tabId → originalUrl
 
-//------------------------------------------
+//------------------------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
-//------------------------------------------
+//------------------------------------------------------------
 
 function toggleStarFilter() {
   const isActive = FilterSystem.toggleStarredOnly();
@@ -81,27 +81,6 @@ async function toggleStarred(bookmarkId, currentTitle) {
   applyCurrentFilters();
 }
 
-//------------------------
-// mqm search arrows (bork)
-let selectedIndex = -1;
-let searchResults = [];
-
-// In search input event listener:
-document.getElementById('searchInput').addEventListener('keydown', (e) => {
-  if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    selectedIndex = Math.min(selectedIndex + 1, searchResults.length - 1);
-    updateSelection();
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    selectedIndex = Math.max(selectedIndex - 1, -1);
-    updateSelection();
-  } else if (e.key === 'Enter' && selectedIndex >= 0) {
-    e.preventDefault();
-    chrome.tabs.update({ url: searchResults[selectedIndex].url });
-  }
-});
-//---------------------------
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
@@ -264,8 +243,9 @@ function setupModalListeners() {
   });
 }
 
-//------------------------------------
-// Connection lines (hover on folder to see lines to open tabs)
+//------------------------------------------
+// Connection Lines
+//------------------------------------------
 
 function setupConnectionLines() {
   connectionSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -409,10 +389,7 @@ function drawConnectionsFromTab(tabUrl) {
   });
 }
 
-//------------------------------------
-// mqm debounce fix
-
-function setupTabListeners() {
+function setupTabListeners() { // Debounce fix
   const scheduleReload = () => {
     // Cancel any pending reload
     if (reloadTimeout) {
@@ -713,11 +690,17 @@ function urlMatches(bookmarkUrl, openUrls) {
 
 function getMatchingTabIds(bookmarkUrl) {
   const normalized = normalizeUrl(bookmarkUrl);
-  
+    
+  // If we only use exact matching, we could just do this one line
+  // instead of all the code below:
+  //   return openTabsMap.get(normalized) || [];
+
+  // Exact match
   if (openTabsMap.has(normalized)) {
     return openTabsMap.get(normalized);
   }
-  
+
+  // Fallback to prefix matching
   const tabIds = [];
   for (let [openUrl, ids] of openTabsMap.entries()) {
     if (openUrl.startsWith(normalized) || normalized.startsWith(openUrl)) {
@@ -727,13 +710,10 @@ function getMatchingTabIds(bookmarkUrl) {
   return tabIds;
 }
 
-//----------------------------------------------
-// mqm fix race condition closing lots of tabs
-
 async function closeBookmarkTab(bookmarkUrl) {
   const tabIds = getMatchingTabIds(bookmarkUrl);
   if (tabIds.length > 0) {
-    try {
+    try { // Fix race condition closing lots of tabs
       await chrome.tabs.remove(tabIds);
     } catch (error) {
       // Tab might already be closed - ignore error
@@ -1406,5 +1386,3 @@ function handleDrop(e) {
     });
   }
 }
-
-//----------------------------------------
