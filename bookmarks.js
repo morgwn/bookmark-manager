@@ -301,16 +301,19 @@ function drawConnections(folderId) {
     });
 
     if (matchingTab) {
-      const from = rect;
       const to = matchingTab.getBoundingClientRect();
 
       // Skip if tab not visible
       if (to.height === 0 || to.width === 0) return;
 
-      // Draw curved bezier line from bookmark's open-indicator area to tab's left edge
+      // Get the title element to start line just after the title text
+      const titleEl = bookmark.querySelector('.title');
+      const titleRect = titleEl ? titleEl.getBoundingClientRect() : rect;
+
+      // Draw curved bezier line from just after bookmark title to tab's left edge
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      const startX = from.left + 30; // near the open indicator dot
-      const startY = from.top + from.height / 2;
+      const startX = titleRect.right + 8; // just after the title
+      const startY = rect.top + rect.height / 2;
       const endX = to.left;
       const endY = to.top + to.height / 2;
 
