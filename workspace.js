@@ -4,15 +4,18 @@
 //==========================================
 
 const WorkspaceManager = {
-  //------------------------------------------
-  // Configuration
-  //------------------------------------------
+
+  //==========================================
+  // CONFIGURATION
+  //==========================================
+  PRESERVE_TAB_STATE: false, // true = storage windows (keeps tabs alive), false = close/reopen
   SESSION_FOLDER_NAME: '.session',
   STORAGE_KEY: 'activeWorkspaces',
+  STORAGE_WINDOWS_KEY: 'storageWindows',
 
-  //------------------------------------------
-  // Active Workspace Tracking (chrome.storage.local)
-  //------------------------------------------
+  //==========================================
+  // SHARED: Active Workspace Tracking
+  //==========================================
   async getActiveWorkspace(windowId) {
     const result = await chrome.storage.local.get(this.STORAGE_KEY);
     const workspaces = result[this.STORAGE_KEY] || {};
@@ -33,11 +36,118 @@ const WorkspaceManager = {
     await chrome.storage.local.set({ [this.STORAGE_KEY]: workspaces });
   },
 
-  //------------------------------------------
-  // Session Folder Management
-  //------------------------------------------
+  //==========================================
+  // SHARED: Tab Utilities
+  //==========================================
+  async getBookmarkManagerTabId(windowId) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const extensionUrl = chrome.runtime.getURL('bookmarks.html');
+    const bmTab = tabs.find(t => t.url === extensionUrl || t.url.startsWith(extensionUrl));
+    return bmTab ? bmTab.id : null;
+  },
+
+  async getCurrentWindowTabs() {
+    const window = await chrome.windows.getCurrent();
+    const tabs = await chrome.tabs.query({ windowId: window.id });
+    const bmTabId = await this.getBookmarkManagerTabId(window.id);
+
+    return tabs.filter(t =>
+      t.id !== bmTabId &&
+      !t.url.startsWith('chrome://') &&
+      !t.url.startsWith('chrome-extension://')
+    );
+  },
+
+  //==========================================
+  // MODE A: Storage Windows (PRESERVE_TAB_STATE=true)
+  // Swaps tabs with minimized windows to preserve state
+  //==========================================
+  async getStorageWindowId(workspaceId) {
+    const result = await chrome.storage.local.get(this.STORAGE_WINDOWS_KEY);
+    const windows = result[this.STORAGE_WINDOWS_KEY] || {};
+    const windowId = windows[workspaceId];
+
+    if (windowId) {
+      try {
+        await chrome.windows.get(windowId);
+        return windowId;
+      } catch {
+        delete windows[workspaceId];
+        await chrome.storage.local.set({ [this.STORAGE_WINDOWS_KEY]: windows });
+        return null;
+      }
+    }
+    return null;
+  },
+
+  async setStorageWindowId(workspaceId, windowId) {
+    const result = await chrome.storage.local.get(this.STORAGE_WINDOWS_KEY);
+    const windows = result[this.STORAGE_WINDOWS_KEY] || {};
+    windows[workspaceId] = windowId;
+    await chrome.storage.local.set({ [this.STORAGE_WINDOWS_KEY]: windows });
+  },
+
+  async clearStorageWindowId(workspaceId) {
+    const result = await chrome.storage.local.get(this.STORAGE_WINDOWS_KEY);
+    const windows = result[this.STORAGE_WINDOWS_KEY] || {};
+    delete windows[workspaceId];
+    await chrome.storage.local.set({ [this.STORAGE_WINDOWS_KEY]: windows });
+  },
+
+  async moveTabsToStorage(workspaceId, tabs) {
+    if (tabs.length === 0) return;
+
+    let storageWindowId = await this.getStorageWindowId(workspaceId);
+
+    if (!storageWindowId) {
+      const newWindow = await chrome.windows.create({
+        tabId: tabs[0].id,
+        state: 'minimized'
+      });
+      storageWindowId = newWindow.id;
+      await this.setStorageWindowId(workspaceId, storageWindowId);
+      tabs = tabs.slice(1);
+    }
+
+    if (tabs.length > 0) {
+      try {
+        await chrome.tabs.move(tabs.map(t => t.id), { windowId: storageWindowId, index: -1 });
+      } catch (e) {
+        console.error('[workspace] Move to storage failed:', e);
+      }
+    }
+  },
+
+  async getStorageTabs(workspaceId) {
+    const storageWindowId = await this.getStorageWindowId(workspaceId);
+    if (!storageWindowId) return [];
+
+    try {
+      return await chrome.tabs.query({ windowId: storageWindowId });
+    } catch {
+      await this.clearStorageWindowId(workspaceId);
+      return [];
+    }
+  },
+
+  async moveTabsFromStorage(workspaceId, targetWindowId) {
+    const tabs = await this.getStorageTabs(workspaceId);
+    if (tabs.length === 0) return 0;
+
+    try {
+      await chrome.tabs.move(tabs.map(t => t.id), { windowId: targetWindowId, index: -1 });
+      return tabs.length;
+    } catch (e) {
+      console.error('[workspace] Move from storage failed:', e);
+      return 0;
+    }
+  },
+
+  //==========================================
+  // MODE B: Bookmarks (PRESERVE_TAB_STATE=false)
+  // Saves URLs to bookmarks, closes tabs, reopens on restore
+  //==========================================
   async getOrCreateSessionFolder(workspaceId) {
-    // Look for existing .session folder
     const children = await chrome.bookmarks.getChildren(workspaceId);
     const existing = children.find(c => c.title === this.SESSION_FOLDER_NAME);
 
@@ -45,7 +155,6 @@ const WorkspaceManager = {
       return existing.id;
     }
 
-    // Create .session folder
     const folder = await chrome.bookmarks.create({
       parentId: workspaceId,
       title: this.SESSION_FOLDER_NAME,
@@ -68,60 +177,16 @@ const WorkspaceManager = {
       .map(b => ({ url: b.url, title: b.title }));
   },
 
-  //------------------------------------------
-  // Tab Operations
-  //------------------------------------------
-  async getBookmarkManagerTabId(windowId) {
-    const tabs = await chrome.tabs.query({ windowId });
-    const extensionUrl = chrome.runtime.getURL('bookmarks.html');
-    const bmTab = tabs.find(t => t.url === extensionUrl || t.url.startsWith(extensionUrl));
-    return bmTab ? bmTab.id : null;
-  },
-
-  async getCurrentWindowTabs() {
-    const window = await chrome.windows.getCurrent();
-    const tabs = await chrome.tabs.query({ windowId: window.id });
-    const bmTabId = await this.getBookmarkManagerTabId(window.id);
-
-    // Filter out bookmark manager tab and chrome:// pages
-    return tabs.filter(t =>
-      t.id !== bmTabId &&
-      !t.url.startsWith('chrome://') &&
-      !t.url.startsWith('chrome-extension://')
-    );
-  },
-
-  async closeAllTabs(windowId, exceptTabId) {
-    const tabs = await chrome.tabs.query({ windowId });
-    const tabsToClose = tabs.filter(t => t.id !== exceptTabId);
-
-    if (tabsToClose.length > 0) {
-      await chrome.tabs.remove(tabsToClose.map(t => t.id));
-    }
-  },
-
-  async openTabs(tabs) {
-    for (const tab of tabs) {
-      await chrome.tabs.create({ url: tab.url, active: false });
-    }
-  },
-
-  //------------------------------------------
-  // Save/Restore Operations
-  //------------------------------------------
   async saveCurrentTabs(workspaceId) {
     const sessionFolderId = await this.getOrCreateSessionFolder(workspaceId);
 
-    // Clear existing session bookmarks
     const existing = await chrome.bookmarks.getChildren(sessionFolderId);
     for (const bookmark of existing) {
       await chrome.bookmarks.remove(bookmark.id);
     }
 
-    // Get current tabs (excluding bookmark manager)
     const tabs = await this.getCurrentWindowTabs();
 
-    // Save each tab as a bookmark
     for (const tab of tabs) {
       await chrome.bookmarks.create({
         parentId: sessionFolderId,
@@ -135,64 +200,63 @@ const WorkspaceManager = {
 
   async restoreTabs(workspaceId) {
     const tabs = await this.getSessionTabs(workspaceId);
-    await this.openTabs(tabs);
+    for (const tab of tabs) {
+      await chrome.tabs.create({ url: tab.url, active: false });
+    }
     return tabs.length;
   },
 
-  //------------------------------------------
-  // High-Level Orchestration
-  //------------------------------------------
+  async closeAllTabs(windowId, exceptTabId) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const tabsToClose = tabs.filter(t => t.id !== exceptTabId);
+
+    if (tabsToClose.length > 0) {
+      await chrome.tabs.remove(tabsToClose.map(t => t.id));
+    }
+  },
+
+  //==========================================
+  // ORCHESTRATION
+  //==========================================
   async activate(workspaceId, callbacks = {}) {
     const { onLooseTabsPrompt, onComplete, onError } = callbacks;
 
     try {
       const window = await chrome.windows.getCurrent();
       const windowId = window.id;
+      const currentWorkspaceId = await this.getActiveWorkspace(windowId);
+      const currentTabs = await this.getCurrentWindowTabs();
       const bmTabId = await this.getBookmarkManagerTabId(windowId);
 
-      // Check if already in a workspace
-      const currentWorkspaceId = await this.getActiveWorkspace(windowId);
-
-      if (currentWorkspaceId) {
-        // Save current workspace first
-        await this.saveCurrentTabs(currentWorkspaceId);
-        await this.closeAllTabs(windowId, bmTabId);
-      } else {
-        // Check for loose tabs
-        const looseTabs = await this.getCurrentWindowTabs();
-
-        if (looseTabs.length > 0 && onLooseTabsPrompt) {
-          // Ask user what to do with loose tabs
-          const choice = await onLooseTabsPrompt(looseTabs.length);
-
-          if (choice === 'bring-in') {
-            // Keep tabs, will merge and save after restore
-            // Don't close tabs
-          } else if (choice === 'discard') {
-            await this.closeAllTabs(windowId, bmTabId);
-          } else {
-            // User cancelled
-            return false;
-          }
-        } else if (looseTabs.length > 0) {
-          // No prompt callback, default to closing
-          await this.closeAllTabs(windowId, bmTabId);
+      // Handle loose tabs (not in a workspace)
+      if (!currentWorkspaceId && currentTabs.length > 0 && onLooseTabsPrompt) {
+        const choice = await onLooseTabsPrompt(currentTabs.length);
+        if (choice === 'discard') {
+          await chrome.tabs.remove(currentTabs.map(t => t.id));
+        } else if (choice !== 'bring-in') {
+          return false;
         }
       }
 
-      // Restore workspace tabs
-      await this.restoreTabs(workspaceId);
-
-      // If we kept loose tabs (bring-in), save merged set
-      const looseTabs = await this.getCurrentWindowTabs();
-      if (looseTabs.length > 0 && !currentWorkspaceId) {
-        // This means we had loose tabs and brought them in
-        await this.saveCurrentTabs(workspaceId);
+      if (this.PRESERVE_TAB_STATE) {
+        // MODE A: Swap with storage windows
+        if (currentWorkspaceId && currentTabs.length > 0) {
+          await this.moveTabsToStorage(currentWorkspaceId, currentTabs);
+        }
+        const restored = await this.moveTabsFromStorage(workspaceId, windowId);
+        if (restored === 0) {
+          await this.restoreTabs(workspaceId);
+        }
+      } else {
+        // MODE B: Save to bookmarks, close, reopen
+        if (currentWorkspaceId) {
+          await this.saveCurrentTabs(currentWorkspaceId);
+        }
+        await this.closeAllTabs(windowId, bmTabId);
+        await this.restoreTabs(workspaceId);
       }
 
-      // Update binding
       await this.setActiveWorkspace(windowId, workspaceId);
-
       if (onComplete) await onComplete();
       return true;
 
@@ -209,24 +273,25 @@ const WorkspaceManager = {
     try {
       const window = await chrome.windows.getCurrent();
       const windowId = window.id;
-      const bmTabId = await this.getBookmarkManagerTabId(windowId);
-
       const currentWorkspaceId = await this.getActiveWorkspace(windowId);
 
-      if (!currentWorkspaceId) {
-        // Not in a workspace, nothing to do
-        return false;
+      if (!currentWorkspaceId) return false;
+
+      const currentTabs = await this.getCurrentWindowTabs();
+      const bmTabId = await this.getBookmarkManagerTabId(windowId);
+
+      if (this.PRESERVE_TAB_STATE) {
+        // MODE A: Move to storage window
+        if (currentTabs.length > 0) {
+          await this.moveTabsToStorage(currentWorkspaceId, currentTabs);
+        }
+      } else {
+        // MODE B: Save to bookmarks and close
+        await this.saveCurrentTabs(currentWorkspaceId);
+        await this.closeAllTabs(windowId, bmTabId);
       }
 
-      // Save current tabs
-      await this.saveCurrentTabs(currentWorkspaceId);
-
-      // Close tabs
-      await this.closeAllTabs(windowId, bmTabId);
-
-      // Clear binding
       await this.clearActiveWorkspace(windowId);
-
       if (onComplete) await onComplete();
       return true;
 
@@ -237,9 +302,9 @@ const WorkspaceManager = {
     }
   },
 
-  //------------------------------------------
-  // Utilities
-  //------------------------------------------
+  //==========================================
+  // UTILITIES
+  //==========================================
   async getCurrentWindowId() {
     const window = await chrome.windows.getCurrent();
     return window.id;
@@ -261,7 +326,6 @@ const WorkspaceManager = {
       const results = await chrome.bookmarks.get(workspaceId);
       return results[0] || null;
     } catch {
-      // Workspace bookmark may have been deleted
       await this.clearActiveWorkspace(windowId);
       return null;
     }
