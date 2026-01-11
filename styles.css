@@ -105,6 +105,28 @@ body {
   border-color: #ffc107;
 }
 
+.close-workspace-btn {
+  background: transparent;
+  border: 1px solid #3a3f4b;
+  color: #8b8d94;
+  font-size: 14px;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.close-workspace-btn:hover {
+  background: #353a45;
+  color: #ff6b6b;
+  border-color: #ff6b6b;
+}
+
+.close-workspace-btn.hidden {
+  display: none;
+}
+
 /* Main content */
 .main-content {
   flex: 1;

@@ -14,6 +14,7 @@
         <input type="text" id="searchInput" placeholder="Search bookmarks..." autocomplete="off">
         <button id="starFilterBtn" title="Show starred only">☆</button>
         <button id="refreshBtn" title="Refresh">↻</button>
+        <button id="closeWorkspaceBtn" class="close-workspace-btn hidden" title="Save & Close Workspace">✕</button>
       </div>
     </div>
     <div class="main-content">
@@ -59,7 +60,21 @@
     </div>
   </div>
 
+  <!-- Modal for loose tabs prompt -->
+  <div id="looseTabsModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">Open Tabs Found</div>
+      <div class="modal-body" id="looseTabsMessage"></div>
+      <div class="modal-buttons">
+        <button id="looseTabsBringIn" class="modal-btn">Bring Into Workspace</button>
+        <button id="looseTabsDiscard" class="modal-btn">Discard Tabs</button>
+        <button id="looseTabsCancel" class="modal-btn cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script src="filters.js"></script>
+  <script src="workspace.js"></script>
   <script src="bookmarks.js"></script>
 </body>
 </html>

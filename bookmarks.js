@@ -8,6 +8,8 @@ let openTabsMap = new Map();
 let pendingFolderId = null;
 let pendingOpenFolderId = null;
 let pendingWorkspaceData = null;
+let activeWorkspaceFolder = null; // Current workspace folder object when in workspace mode
+let looseTabsResolve = null; // For loose tabs modal promise
 
 //------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -21,7 +23,7 @@ function toggleStarFilter() {
   applyCurrentFilters();
 }
 
-function applyCurrentFilters() {
+async function applyCurrentFilters() {
   if (!FilterSystem.isActive()) {
     loadBookmarks();
     return;
@@ -29,34 +31,39 @@ function applyCurrentFilters() {
 
   const query = FilterSystem.config.searchQuery;
 
-  chrome.bookmarks.getTree((tree) => {
-    const bookmarks = tree[0].children;
+  // Get appropriate bookmark tree based on workspace mode
+  let bookmarks;
+  if (activeWorkspaceFolder) {
+    const subtree = await chrome.bookmarks.getSubTree(activeWorkspaceFolder.id);
+    bookmarks = [subtree[0]];
+  } else {
+    const tree = await chrome.bookmarks.getTree();
+    bookmarks = tree[0].children;
+  }
 
-    if (query.trim()) {
-      chrome.bookmarks.search(query, (results) => {
-        const matchingIds = new Set(results.map(r => r.id));
-        const filtered = FilterSystem.apply(bookmarks, matchingIds);
+  if (query.trim()) {
+    const results = await chrome.bookmarks.search(query);
+    const matchingIds = new Set(results.map(r => r.id));
+    const filtered = FilterSystem.apply(bookmarks, matchingIds);
 
-        if (filtered.length === 0) {
-          document.getElementById('bookmarkTree').innerHTML =
-            '<div class="no-results">No bookmarks found</div>';
-          return;
-        }
-
-        renderBookmarks(filtered);
-      });
-    } else {
-      const filtered = FilterSystem.apply(bookmarks);
-
-      if (filtered.length === 0) {
-        document.getElementById('bookmarkTree').innerHTML =
-          '<div class="no-results">No starred bookmarks</div>';
-        return;
-      }
-
-      renderBookmarks(filtered);
+    if (filtered.length === 0) {
+      document.getElementById('bookmarkTree').innerHTML =
+        '<div class="no-results">No bookmarks found</div>';
+      return;
     }
-  });
+
+    renderBookmarks(filtered);
+  } else {
+    const filtered = FilterSystem.apply(bookmarks);
+
+    if (filtered.length === 0) {
+      document.getElementById('bookmarkTree').innerHTML =
+        '<div class="no-results">No starred bookmarks</div>';
+      return;
+    }
+
+    renderBookmarks(filtered);
+  }
 }
 
 async function toggleStarred(bookmarkId, currentTitle) {
@@ -92,6 +99,10 @@ document.getElementById('searchInput').addEventListener('keydown', (e) => {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async () => {
+  // Check if we're already in a workspace
+  activeWorkspaceFolder = await WorkspaceManager.getActiveWorkspaceFolder();
+  updateWorkspaceUI();
+
   await loadOpenTabs();
   await loadBookmarks();
   setupEventListeners();
@@ -117,6 +128,8 @@ function setupEventListeners() {
     FilterSystem.setSearchQuery(e.target.value);
     applyCurrentFilters();
   });
+
+  document.getElementById('closeWorkspaceBtn').addEventListener('click', deactivateWorkspace);
 }
 
 function setupModalListeners() {
@@ -190,6 +203,25 @@ function setupModalListeners() {
   document.getElementById('workspaceModal').addEventListener('click', (e) => {
     if (e.target.id === 'workspaceModal') {
       closeWorkspaceModal();
+    }
+  });
+
+  // Loose tabs modal buttons
+  document.getElementById('looseTabsBringIn').addEventListener('click', () => {
+    closeLooseTabsModal('bring-in');
+  });
+
+  document.getElementById('looseTabsDiscard').addEventListener('click', () => {
+    closeLooseTabsModal('discard');
+  });
+
+  document.getElementById('looseTabsCancel').addEventListener('click', () => {
+    closeLooseTabsModal('cancel');
+  });
+
+  document.getElementById('looseTabsModal').addEventListener('click', (e) => {
+    if (e.target.id === 'looseTabsModal') {
+      closeLooseTabsModal('cancel');
     }
   });
 }
@@ -310,6 +342,72 @@ async function toggleWorkspace() {
   await chrome.bookmarks.update(bookmarkId, { title: newTitle });
   closeWorkspaceModal();
   applyCurrentFilters();
+}
+
+//------------------------------------------
+// Workspace Activation UI
+//------------------------------------------
+function updateWorkspaceUI() {
+  const closeBtn = document.getElementById('closeWorkspaceBtn');
+  const header = document.querySelector('.header h1');
+
+  if (activeWorkspaceFolder) {
+    const { displayTitle } = FilterSystem.parseTitle(activeWorkspaceFolder.title);
+    header.textContent = `🗂️ ${displayTitle}`;
+    closeBtn.classList.remove('hidden');
+  } else {
+    header.textContent = '📚 GoldenTab Bookmark Manager';
+    closeBtn.classList.add('hidden');
+  }
+}
+
+function showLooseTabsModal(tabCount) {
+  return new Promise((resolve) => {
+    looseTabsResolve = resolve;
+    const modal = document.getElementById('looseTabsModal');
+    const message = document.getElementById('looseTabsMessage');
+    message.textContent = `You have ${tabCount} open tab${tabCount !== 1 ? 's' : ''}. What would you like to do with them?`;
+    modal.style.display = 'flex';
+  });
+}
+
+function closeLooseTabsModal(choice) {
+  document.getElementById('looseTabsModal').style.display = 'none';
+  if (looseTabsResolve) {
+    looseTabsResolve(choice);
+    looseTabsResolve = null;
+  }
+}
+
+async function activateWorkspace(workspaceId) {
+  const success = await WorkspaceManager.activate(workspaceId, {
+    onLooseTabsPrompt: (tabCount) => showLooseTabsModal(tabCount),
+    onComplete: async () => {
+      activeWorkspaceFolder = await WorkspaceManager.getActiveWorkspaceFolder();
+      updateWorkspaceUI();
+      await loadOpenTabs();
+      await loadBookmarks();
+    },
+    onError: (error) => {
+      alert('Error activating workspace: ' + error.message);
+    }
+  });
+  return success;
+}
+
+async function deactivateWorkspace() {
+  const success = await WorkspaceManager.deactivate({
+    onComplete: async () => {
+      activeWorkspaceFolder = null;
+      updateWorkspaceUI();
+      await loadOpenTabs();
+      await loadBookmarks();
+    },
+    onError: (error) => {
+      alert('Error closing workspace: ' + error.message);
+    }
+  });
+  return success;
 }
 
 // Tab management
@@ -538,8 +636,15 @@ async function openFolderBookmarks(folderId, recursive) {
 
 // Rendering
 async function loadBookmarks() {
-  const tree = await chrome.bookmarks.getTree();
-  renderBookmarks(tree[0].children);
+  if (activeWorkspaceFolder) {
+    // In workspace mode - render only the workspace folder
+    const subtree = await chrome.bookmarks.getSubTree(activeWorkspaceFolder.id);
+    renderBookmarks([subtree[0]]);
+  } else {
+    // Normal mode - render all bookmarks
+    const tree = await chrome.bookmarks.getTree();
+    renderBookmarks(tree[0].children);
+  }
 }
 
 function renderBookmarks(bookmarks, parentElement = null, level = 0, parentCollapsed = false) {
@@ -549,7 +654,7 @@ function renderBookmarks(bookmarks, parentElement = null, level = 0, parentColla
   bookmarks.forEach(bookmark => {
     const isCollapsed = collapsedFolders.has(bookmark.id);
     const shouldHide = parentCollapsed;
-    
+
     const item = createBookmarkElement(bookmark, level, isCollapsed, shouldHide);
     container.appendChild(item);
 
@@ -589,18 +694,30 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   } else if (bookmark.children) {
     div.addEventListener('dblclick', async (e) => {
       e.stopPropagation();
-      
+
+      // If it's a workspace...
+      if (metadata.workspace) {
+        // If we're already in this workspace, deactivate it
+        if (activeWorkspaceFolder && activeWorkspaceFolder.id === bookmark.id) {
+          await deactivateWorkspace();
+          return;
+        }
+        // Otherwise activate it
+        await activateWorkspace(bookmark.id);
+        return;
+      }
+
       const subtree = await chrome.bookmarks.getSubTree(bookmark.id);
       const hasSubfolder = hasSubfolders(subtree[0]);
       const countRecursive = countFolderUrls(subtree[0], true, 0);
       const countLevel = countFolderUrls(subtree[0], false, 0);
       const count = hasSubfolder ? countRecursive : countLevel;
-      
+
       if (count === 0) {
         alert('No bookmarks to open');
         return;
       }
-      
+
       if (count > 10 || hasSubfolder) {
         pendingOpenFolderId = bookmark.id;
         showOpenModal(displayTitle, count, hasSubfolder);

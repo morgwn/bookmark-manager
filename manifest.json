@@ -6,7 +6,8 @@
   "permissions": [
     "bookmarks",
     "tabs",
-    "favicon"
+    "favicon",
+    "storage"
   ],
   "action": {
     // "default_icon": {
