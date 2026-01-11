@@ -253,6 +253,24 @@ body {
   border-color: #ff6b6b;
 }
 
+/* Bookmark indicator on tabs */
+/* Bright dot = bookmarked in current workspace (safe to close) */
+.bookmark-indicator {
+  width: 8px;
+  height: 8px;
+  background: #ff6b35;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 4px rgba(255, 107, 53, 0.6);
+}
+
+/* Dim dot = bookmarked elsewhere (not in this workspace) */
+.bookmark-indicator.external {
+  opacity: 0.5;
+  transform: scale(0.7);
+  box-shadow: none;
+}
+
 /* Bookmark items */
 .bookmark-folder,
 .bookmark-item {

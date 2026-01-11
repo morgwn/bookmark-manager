@@ -11,6 +11,8 @@ let pendingWorkspaceData = null;
 let activeWorkspaceFolder = null; // Current workspace folder object when in workspace mode
 let looseTabsResolve = null; // For loose tabs modal promise
 let orderedTabs = []; // Tabs in browser order for Active Tabs folder
+let allBookmarkUrls = new Set(); // All bookmark URLs for indicator dots
+let workspaceBookmarkUrls = new Set(); // URLs in current workspace (for bright dot)
 
 //------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -281,13 +283,20 @@ function setupTabListeners() {
       reloadTimeout = null;
     }, 300);
   };
-    
+
+  // Tab events
   chrome.tabs.onCreated.addListener(scheduleReload);
   chrome.tabs.onUpdated.addListener(scheduleReload);
   chrome.tabs.onRemoved.addListener(scheduleReload);
   chrome.tabs.onMoved.addListener(scheduleReload);
   chrome.tabs.onDetached.addListener(scheduleReload);
   chrome.tabs.onAttached.addListener(scheduleReload);
+
+  // Bookmark events (to update indicator dots when bookmarks change)
+  chrome.bookmarks.onCreated.addListener(scheduleReload);
+  chrome.bookmarks.onRemoved.addListener(scheduleReload);
+  chrome.bookmarks.onChanged.addListener(scheduleReload);
+  chrome.bookmarks.onMoved.addListener(scheduleReload);
 }
 
 // function setupTabListeners() {
@@ -773,6 +782,20 @@ function renderActiveTabs() {
       chrome.tabs.update(tab.id, { active: true });
     });
 
+    // Bookmark indicator dot:
+    // - Bright dot = bookmarked in current workspace (safe to close)
+    // - Dim dot = bookmarked elsewhere (still saved, but not in this workspace)
+    const normalizedUrl = normalizeUrl(tab.url);
+    const inWorkspace = workspaceBookmarkUrls.has(normalizedUrl);
+    const inExternal = !inWorkspace && allBookmarkUrls.has(normalizedUrl);
+
+    if (inWorkspace || inExternal) {
+      const indicator = document.createElement('span');
+      indicator.className = 'bookmark-indicator' + (inExternal ? ' external' : '');
+      indicator.title = inWorkspace ? 'Bookmarked in workspace' : 'Bookmarked elsewhere';
+      item.appendChild(indicator);
+    }
+
     // Favicon
     const favicon = document.createElement('img');
     favicon.className = 'favicon';
@@ -811,21 +834,43 @@ function renderActiveTabs() {
 async function loadBookmarks() {
   console.log('loadBookmarks called, activeWorkspaceFolder:', activeWorkspaceFolder);
   try {
+    // Build full bookmark URL set (for "external" indicator - dim dot)
+    const fullTree = await chrome.bookmarks.getTree();
+    allBookmarkUrls = new Set();
+    buildBookmarkUrlSet(fullTree[0], allBookmarkUrls);
+
+    // Reset workspace set
+    workspaceBookmarkUrls = new Set();
+
     if (activeWorkspaceFolder) {
-      // In workspace mode - render only the workspace folder
+      // In workspace mode - also build workspace URL set (for "in workspace" indicator - bright dot)
+      // Pass skipSession=true to exclude .session folder (saved session tabs aren't "real" bookmarks)
       console.log('Workspace mode, getting subtree for id:', activeWorkspaceFolder.id);
       const subtree = await chrome.bookmarks.getSubTree(activeWorkspaceFolder.id);
+      buildBookmarkUrlSet(subtree[0], workspaceBookmarkUrls, true);
       console.log('Got subtree:', subtree);
       renderBookmarks([subtree[0]]);
     } else {
       // Normal mode - render all bookmarks
       console.log('Normal mode, getting full tree');
-      const tree = await chrome.bookmarks.getTree();
-      console.log('Got tree:', tree);
-      renderBookmarks(tree[0].children);
+      renderBookmarks(fullTree[0].children);
     }
   } catch (error) {
     console.error('loadBookmarks error:', error);
+  }
+}
+
+// Recursively collects all bookmark URLs from a node into the given Set
+// skipSession: if true, skips .session folders (used for workspace set to exclude saved session tabs)
+function buildBookmarkUrlSet(node, targetSet, skipSession = false) {
+  // Skip .session folders when building workspace set (they're temporary storage, not real bookmarks)
+  if (skipSession && node.title === '.session') return;
+
+  if (node.url) {
+    targetSet.add(normalizeUrl(node.url));
+  }
+  if (node.children) {
+    node.children.forEach(child => buildBookmarkUrlSet(child, targetSet, skipSession));
   }
 }
 
