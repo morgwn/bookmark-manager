@@ -281,6 +281,10 @@ function drawConnections(folderId) {
   if (!connectionSvg) return;
   connectionSvg.innerHTML = '';
 
+  // Get the divider position (right panel's left edge)
+  const rightPanel = document.querySelector('.right-panel');
+  const maxBookmarkX = rightPanel ? rightPanel.getBoundingClientRect().left - 25 : Infinity;
+
   // Find all visible bookmark items that are children of this folder
   const bookmarkItems = document.querySelectorAll(`.bookmark-item[data-parent-id="${folderId}"]`);
 
@@ -312,7 +316,7 @@ function drawConnections(folderId) {
 
       // Draw curved bezier line from just after bookmark title to tab's left edge
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      const startX = titleRect.right + 8; // just after the title
+      const startX = Math.min(titleRect.right + 8, maxBookmarkX); // capped at divider
       const startY = rect.top + rect.height / 2;
       const endX = to.left;
       const endY = to.top + to.height / 2;
@@ -344,6 +348,68 @@ function clearConnections() {
   if (connectionSvg) {
     connectionSvg.innerHTML = '';
   }
+}
+
+function drawConnectionsFromTab(tabUrl) {
+  if (!connectionSvg) return;
+  connectionSvg.innerHTML = '';
+
+  const normalizedTabUrl = normalizeUrl(tabUrl);
+
+  // Get the divider position (right panel's left edge)
+  const rightPanel = document.querySelector('.right-panel');
+  const maxBookmarkX = rightPanel ? rightPanel.getBoundingClientRect().left - 25 : Infinity;
+
+  // Find ALL matching tabs
+  const matchingTabs = [...document.querySelectorAll('.tab-item')].filter(tab => {
+    const url = tab.querySelector('.tab-title')?.title;
+    return url && normalizeUrl(url) === normalizedTabUrl;
+  });
+
+  // Find ALL matching bookmarks (visible only)
+  const matchingBookmarks = [...document.querySelectorAll('.bookmark-item')].filter(bookmark => {
+    const rect = bookmark.getBoundingClientRect();
+    if (rect.height === 0 || rect.width === 0) return false;
+    const bookmarkUrl = bookmark.dataset.url;
+    return bookmarkUrl && normalizeUrl(bookmarkUrl) === normalizedTabUrl;
+  });
+
+  // Draw lines between every tab and every bookmark
+  matchingTabs.forEach(tabEl => {
+    const tabRect = tabEl.getBoundingClientRect();
+
+    matchingBookmarks.forEach(bookmark => {
+      const rect = bookmark.getBoundingClientRect();
+      const titleEl = bookmark.querySelector('.title');
+      const titleRect = titleEl ? titleEl.getBoundingClientRect() : rect;
+
+      // Draw line from tab (left edge) to bookmark (after title, capped at divider)
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const startX = tabRect.left;
+      const startY = tabRect.top + tabRect.height / 2;
+      const endX = Math.min(titleRect.right + 8, maxBookmarkX);
+      const endY = rect.top + rect.height / 2;
+
+      const controlOffset = Math.min(100, Math.abs(endX - startX) / 2);
+
+      path.setAttribute('d', `M${startX},${startY} C${startX - controlOffset},${startY} ${endX + controlOffset},${endY} ${endX},${endY}`);
+      path.setAttribute('stroke', '#ff6b35');
+      path.setAttribute('stroke-width', '2');
+      path.setAttribute('fill', 'none');
+      path.setAttribute('opacity', '0.6');
+      connectionSvg.appendChild(path);
+
+      // Dots at endpoints
+      [{ x: startX, y: startY }, { x: endX, y: endY }].forEach(point => {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', point.x);
+        circle.setAttribute('cy', point.y);
+        circle.setAttribute('r', '4');
+        circle.setAttribute('fill', '#ff6b35');
+        connectionSvg.appendChild(circle);
+      });
+    });
+  });
 }
 
 //------------------------------------
@@ -874,6 +940,9 @@ function renderActiveTabs() {
       const indicator = document.createElement('span');
       indicator.className = 'bookmark-indicator' + (inExternal ? ' external' : '');
       indicator.title = inWorkspace ? 'Bookmarked in workspace' : 'Bookmarked elsewhere';
+      indicator.style.cursor = 'pointer';
+      indicator.addEventListener('mouseenter', () => drawConnectionsFromTab(tab.url));
+      indicator.addEventListener('mouseleave', clearConnections);
       item.appendChild(indicator);
     }
 
@@ -1057,6 +1126,9 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     const dot = document.createElement('span');
     dot.className = 'open-indicator';
     dot.title = 'Tab is open';
+    dot.style.cursor = 'pointer';
+    dot.addEventListener('mouseenter', () => drawConnectionsFromTab(bookmark.url));
+    dot.addEventListener('mouseleave', clearConnections);
     content.appendChild(dot);
   } else if (!bookmark.children) {
     const spacer = document.createElement('span');
