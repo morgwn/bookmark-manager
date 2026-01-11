@@ -10,6 +10,7 @@ let pendingOpenFolderId = null;
 let pendingWorkspaceData = null;
 let activeWorkspaceFolder = null; // Current workspace folder object when in workspace mode
 let looseTabsResolve = null; // For loose tabs modal promise
+let orderedTabs = []; // Tabs in browser order for Active Tabs folder
 
 //------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -41,6 +42,9 @@ async function applyCurrentFilters() {
     bookmarks = tree[0].children;
   }
 
+  // Always include Active Tabs folder at the top
+  const activeTabsFolder = createActiveTabsFolder();
+
   if (query.trim()) {
     const results = await chrome.bookmarks.search(query);
     const matchingIds = new Set(results.map(r => r.id));
@@ -52,7 +56,7 @@ async function applyCurrentFilters() {
       return;
     }
 
-    renderBookmarks(filtered);
+    renderBookmarks([activeTabsFolder, ...filtered]);
   } else {
     const filtered = FilterSystem.apply(bookmarks);
 
@@ -62,7 +66,7 @@ async function applyCurrentFilters() {
       return;
     }
 
-    renderBookmarks(filtered);
+    renderBookmarks([activeTabsFolder, ...filtered]);
   }
 }
 
@@ -349,14 +353,10 @@ async function toggleWorkspace() {
 //------------------------------------------
 function updateWorkspaceUI() {
   const closeBtn = document.getElementById('closeWorkspaceBtn');
-  const header = document.querySelector('.header h1');
 
   if (activeWorkspaceFolder) {
-    const { displayTitle } = FilterSystem.parseTitle(activeWorkspaceFolder.title);
-    header.textContent = `🗂️ ${displayTitle}`;
     closeBtn.classList.remove('hidden');
   } else {
-    header.textContent = '📚 GoldenTab Bookmark Manager';
     closeBtn.classList.add('hidden');
   }
 }
@@ -412,10 +412,20 @@ async function deactivateWorkspace() {
 
 // Tab management
 async function loadOpenTabs() {
-  const tabs = await chrome.tabs.query({});
+  const window = await chrome.windows.getCurrent();
+  const tabs = await chrome.tabs.query({ windowId: window.id });
   openTabUrls = new Set();
   openTabsMap = new Map();
-  
+
+  const extensionUrl = chrome.runtime.getURL('bookmarks.html');
+
+  // Store ordered tabs for Active Tabs folder (exclude bookmark manager and chrome:// pages)
+  orderedTabs = tabs.filter(tab =>
+    !tab.url.startsWith('chrome://') &&
+    !tab.url.startsWith('chrome-extension://') &&
+    tab.url !== extensionUrl
+  );
+
   tabs.forEach(tab => {
     const normalized = normalizeUrl(tab.url);
     openTabUrls.add(normalized);
@@ -635,15 +645,32 @@ async function openFolderBookmarks(folderId, recursive) {
 }
 
 // Rendering
+function createActiveTabsFolder() {
+  return {
+    id: '_active_tabs_',
+    title: 'Active Tabs',
+    children: orderedTabs.map(tab => ({
+      id: `_tab_${tab.id}`,
+      title: tab.title || tab.url,
+      url: tab.url,
+      _isActiveTab: true,
+      _tabId: tab.id
+    })),
+    _isActiveTabsFolder: true
+  };
+}
+
 async function loadBookmarks() {
+  const activeTabsFolder = createActiveTabsFolder();
+
   if (activeWorkspaceFolder) {
     // In workspace mode - render only the workspace folder
     const subtree = await chrome.bookmarks.getSubTree(activeWorkspaceFolder.id);
-    renderBookmarks([subtree[0]]);
+    renderBookmarks([activeTabsFolder, subtree[0]]);
   } else {
     // Normal mode - render all bookmarks
     const tree = await chrome.bookmarks.getTree();
-    renderBookmarks(tree[0].children);
+    renderBookmarks([activeTabsFolder, ...tree[0].children]);
   }
 }
 
@@ -652,6 +679,9 @@ function renderBookmarks(bookmarks, parentElement = null, level = 0, parentColla
   if (!parentElement) container.innerHTML = '';
 
   bookmarks.forEach(bookmark => {
+    // Hide .session folders (internal bookkeeping)
+    if (bookmark.title === '.session') return;
+
     const isCollapsed = collapsedFolders.has(bookmark.id);
     const shouldHide = parentCollapsed;
 
@@ -665,6 +695,10 @@ function renderBookmarks(bookmarks, parentElement = null, level = 0, parentColla
 }
 
 function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
+  // Check for virtual Active Tabs items
+  const isActiveTab = bookmark._isActiveTab;
+  const isActiveTabsFolder = bookmark._isActiveTabsFolder;
+
   // Parse title for metadata (starred, etc.)
   const { displayTitle, metadata } = FilterSystem.parseTitle(bookmark.title);
 
@@ -673,20 +707,30 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
 
   const div = document.createElement('div');
   div.className = bookmark.children ? 'bookmark-folder' : 'bookmark-item';
+  if (isActiveTabsFolder) {
+    div.classList.add('active-tabs-folder');
+  }
   if (isContextItem) {
     div.classList.add('filter-context');
   }
   div.dataset.id = bookmark.id;
   div.dataset.parentId = bookmark.parentId;
   div.dataset.index = bookmark.index;
-  div.draggable = true;
+  // Don't allow dragging virtual items
+  div.draggable = !isActiveTab && !isActiveTabsFolder;
 
   if (shouldHide) {
     div.style.display = 'none';
   }
-  
+
   // Double-click handlers
-  if (!bookmark.children && bookmark.url) {
+  if (isActiveTab) {
+    // Active tab: double-click focuses the tab
+    div.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      chrome.tabs.update(bookmark._tabId, { active: true });
+    });
+  } else if (!bookmark.children && bookmark.url) {
     div.addEventListener('dblclick', (e) => {
       e.stopPropagation();
       chrome.tabs.create({ url: bookmark.url, active: !e.shiftKey });
@@ -732,17 +776,19 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   content.style.paddingLeft = `${16 + (level * 26)}px`;
 
   const isOpen = !bookmark.children && bookmark.url && urlMatches(bookmark.url, openTabUrls);
-  
-  // Orange dot indicator
-  if (isOpen) {
-    const dot = document.createElement('span');
-    dot.className = 'open-indicator';
-    dot.title = 'Tab is open';
-    content.appendChild(dot);
-  } else if (!bookmark.children) {
-    const spacer = document.createElement('span');
-    spacer.className = 'open-indicator-spacer';
-    content.appendChild(spacer);
+
+  // Orange dot indicator (skip for active tabs - they're all open by definition)
+  if (!isActiveTab) {
+    if (isOpen) {
+      const dot = document.createElement('span');
+      dot.className = 'open-indicator';
+      dot.title = 'Tab is open';
+      content.appendChild(dot);
+    } else if (!bookmark.children) {
+      const spacer = document.createElement('span');
+      spacer.className = 'open-indicator-spacer';
+      content.appendChild(spacer);
+    }
   }
 
   // Expand/collapse arrow for folders
@@ -759,7 +805,11 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
 
   // Icon and title
   let icon;
-  if (bookmark.children) {
+  if (isActiveTabsFolder) {
+    icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.textContent = '🔵';
+  } else if (bookmark.children) {
     icon = document.createElement('span');
     icon.className = 'icon';
     icon.textContent = '📁';
@@ -807,18 +857,33 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   const actions = document.createElement('div');
   actions.className = 'actions';
 
-  // Star button (for both bookmarks and folders)
-  const starBtn = document.createElement('button');
-  starBtn.textContent = metadata.starred ? '★' : '☆';
-  starBtn.title = metadata.starred ? 'Unstar' : 'Star';
-  starBtn.className = metadata.starred ? 'starred' : '';
-  starBtn.onclick = async (e) => {
-    e.stopPropagation();
-    await toggleStarred(bookmark.id, bookmark.title);
-  };
-  actions.appendChild(starBtn);
+  // Active tab items: just close button
+  if (isActiveTab) {
+    const closeTabBtn = document.createElement('button');
+    closeTabBtn.textContent = '✕';
+    closeTabBtn.title = 'Close Tab';
+    closeTabBtn.onclick = async (e) => {
+      e.stopPropagation();
+      await chrome.tabs.remove(bookmark._tabId);
+      await loadOpenTabs();
+      await loadBookmarks();
+    };
+    actions.appendChild(closeTabBtn);
+  } else if (isActiveTabsFolder) {
+    // No action buttons for Active Tabs folder
+  } else if (!bookmark.children) {
+    // Regular bookmark actions
+    // Star button
+    const starBtn = document.createElement('button');
+    starBtn.textContent = metadata.starred ? '★' : '☆';
+    starBtn.title = metadata.starred ? 'Unstar' : 'Star';
+    starBtn.className = metadata.starred ? 'starred' : '';
+    starBtn.onclick = async (e) => {
+      e.stopPropagation();
+      await toggleStarred(bookmark.id, bookmark.title);
+    };
+    actions.appendChild(starBtn);
 
-  if (!bookmark.children) {
     // Close tab button (only if open)
     if (isOpen) {
       const closeTabBtn = document.createElement('button');
@@ -830,7 +895,7 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
       };
       actions.appendChild(closeTabBtn);
     }
-    
+
     // Open button
     const openBtn = document.createElement('button');
     openBtn.textContent = '↗';
@@ -840,8 +905,21 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
       chrome.tabs.create({ url: bookmark.url, active: !e.shiftKey });
     };
     actions.appendChild(openBtn);
-  } else {
-    // Workspace toggle button (folders only)
+  } else if (!isActiveTabsFolder) {
+    // Folder actions (not for Active Tabs folder)
+
+    // Star button
+    const starBtn = document.createElement('button');
+    starBtn.textContent = metadata.starred ? '★' : '☆';
+    starBtn.title = metadata.starred ? 'Unstar' : 'Star';
+    starBtn.className = metadata.starred ? 'starred' : '';
+    starBtn.onclick = async (e) => {
+      e.stopPropagation();
+      await toggleStarred(bookmark.id, bookmark.title);
+    };
+    actions.appendChild(starBtn);
+
+    // Workspace toggle button
     const workspaceBtn = document.createElement('button');
     workspaceBtn.textContent = metadata.workspace ? '🗂️' : '📁';
     workspaceBtn.title = metadata.workspace ? 'Remove Workspace' : 'Make Workspace';
@@ -864,20 +942,22 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     actions.appendChild(closeFolderBtn);
   }
 
-  // Delete button
-  const deleteBtn = document.createElement('button');
-  deleteBtn.textContent = '×';
-  deleteBtn.title = 'Delete';
-  deleteBtn.onclick = (e) => {
-    e.stopPropagation();
-    if (confirm(`Delete "${displayTitle}"?`)) {
-      chrome.bookmarks.remove(bookmark.id, async () => {
-        await loadOpenTabs();
-        applyCurrentFilters();
-      });
-    }
-  };
-  actions.appendChild(deleteBtn);
+  // Delete button (not for virtual items)
+  if (!isActiveTab && !isActiveTabsFolder) {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = '×';
+    deleteBtn.title = 'Delete';
+    deleteBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (confirm(`Delete "${displayTitle}"?`)) {
+        chrome.bookmarks.remove(bookmark.id, async () => {
+          await loadOpenTabs();
+          applyCurrentFilters();
+        });
+      }
+    };
+    actions.appendChild(deleteBtn);
+  }
 
   content.appendChild(actions);
   div.appendChild(content);

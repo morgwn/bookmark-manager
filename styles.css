@@ -127,6 +127,16 @@ body {
   display: none;
 }
 
+/* Active Tabs folder styling */
+.active-tabs-folder {
+  background: rgba(88, 101, 242, 0.08);
+  border-bottom: 1px solid rgba(88, 101, 242, 0.2);
+}
+
+.active-tabs-folder:hover {
+  background: rgba(88, 101, 242, 0.12);
+}
+
 /* Main content */
 .main-content {
   flex: 1;

@@ -193,7 +193,7 @@ const WorkspaceManager = {
       // Update binding
       await this.setActiveWorkspace(windowId, workspaceId);
 
-      if (onComplete) onComplete();
+      if (onComplete) await onComplete();
       return true;
 
     } catch (error) {
@@ -227,7 +227,7 @@ const WorkspaceManager = {
       // Clear binding
       await this.clearActiveWorkspace(windowId);
 
-      if (onComplete) onComplete();
+      if (onComplete) await onComplete();
       return true;
 
     } catch (error) {
