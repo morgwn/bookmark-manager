@@ -26,8 +26,6 @@ let floatingWindowId = null; // Track floating window for repositioning
 let mainWindowId = null; // Track main window to follow
 let currentWindowId = null; // This window's ID for per-window workspace storage
 let floatingWindowWasOpen = false; // Track if floating window was open before minimize
-let floatingWindowPollInterval = null; // Poll for minimize state
-let floatingWindowPollBusy = false; // Prevent concurrent poll executions
 
 //------------------------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -183,7 +181,7 @@ function setupEventListeners() {
   if (COMPANION_MODE === 'floating') {
     chrome.windows.onBoundsChanged.addListener(handleWindowBoundsChanged);
     chrome.windows.onRemoved.addListener(handleWindowRemoved);
-    chrome.windows.onFocusChanged.addListener(handleWindowFocusChanged);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
   }
 
   // Active tabs panel accepts bookmark drops (for "past the end" drops)
@@ -1067,7 +1065,7 @@ async function openCompanionPanel() {
 // Floating Window Management
 // Creates a companion window that stays attached to the left side of the main window.
 // Handles: positioning, minimize/restore behavior, and cleanup.
-// Uses polling because Chrome lacks a window state change event.
+// Uses visibilitychange event to detect minimize/restore (no polling needed).
 //------------------------------------------
 
 // Opens a floating companion window positioned to the left of the main window.
@@ -1085,7 +1083,14 @@ async function openFloatingWindow() {
     for (const win of allWindows) {
       if (win.type === 'popup' && win.tabs?.some(t => t.url === sidepanelUrl)) {
         floatingWindowId = win.id;
-        startFloatingWindowPoll();
+        // Update position to match current main window bounds
+        try {
+          await chrome.windows.update(floatingWindowId, {
+            left: Math.max(0, currentWindow.left - 200 - 5),
+            top: currentWindow.top,
+            height: currentWindow.height
+          });
+        } catch (e) {}
         return; // Already exists, just track it
       }
     }
@@ -1098,17 +1103,21 @@ async function openFloatingWindow() {
     } catch (e) {} // Window may already be closed
   }
 
+  // Create focused so it appears on same macOS desktop as main window
   const floatingWindow = await chrome.windows.create({
     url: `sidepanel.html?windowId=${currentWindow.id}`,
     type: 'popup',
     width: 200,
     height: currentWindow.height,
     left: Math.max(0, currentWindow.left - 200 - 5),
-    top: currentWindow.top
+    top: currentWindow.top,
+    focused: true
   });
 
   floatingWindowId = floatingWindow.id;
-  startFloatingWindowPoll();
+
+  // Return focus to main window
+  await chrome.windows.update(currentWindow.id, { focused: true });
 }
 
 // Keeps floating window attached when main window moves or resizes.
@@ -1124,75 +1133,68 @@ async function handleWindowBoundsChanged(window) {
       height: window.height
     });
   } catch (e) {
-    // Floating window is gone - clean up fully
+    // Floating window is gone
     floatingWindowId = null;
-    stopFloatingWindowPoll();
   }
 }
 
-// Cleanup when floating window is closed (manually or programmatically).
-function handleWindowRemoved(windowId) {
+// Cleanup when floating window or main window is closed.
+async function handleWindowRemoved(windowId) {
   if (windowId === floatingWindowId) {
     floatingWindowId = null;
-    stopFloatingWindowPoll();
+  } else if (windowId === mainWindowId && floatingWindowId) {
+    // Main window closed - also close the floating window
+    const windowToRemove = floatingWindowId;
+    floatingWindowId = null;
+    try {
+      await chrome.windows.remove(windowToRemove);
+    } catch (e) {} // May already be closed
   }
 }
 
-// Polls main window state to detect minimize (Chrome has no onStateChanged event).
-// When minimized: closes floating window and remembers it was open for restore.
-function startFloatingWindowPoll() {
-  if (floatingWindowPollInterval) return;
-
-  floatingWindowPollInterval = setInterval(async () => {
-    // Prevent concurrent executions (async callback can overlap with next interval)
-    if (floatingWindowPollBusy) return;
-    floatingWindowPollBusy = true;
-
+// Handle minimize/restore via document visibility.
+// Only close floating window if main window is actually minimized (not just Space switch).
+// When restored: recreate floating window, or reposition existing one to current Space.
+async function handleVisibilityChange() {
+  if (document.hidden) {
+    // Check if actually minimized (not just Space switch)
     try {
-      if (!floatingWindowId) {
-        stopFloatingWindowPoll();
-        return;
-      }
-
-      const win = await chrome.windows.get(currentWindowId);
-      if (win.state === 'minimized') {
+      const win = await chrome.windows.get(mainWindowId);
+      if (win.state === 'minimized' && floatingWindowId) {
         floatingWindowWasOpen = true;
-        // Stop poll and clear ID BEFORE async remove to avoid race with focus event
-        stopFloatingWindowPoll();
         const windowToRemove = floatingWindowId;
         floatingWindowId = null;
-        await chrome.windows.remove(windowToRemove);
+        try {
+          await chrome.windows.remove(windowToRemove);
+        } catch (e) {} // May already be closed
       }
-    } catch (e) {
-      // Transient error - just log, don't kill everything
-      // handleWindowRemoved will clean up if window is actually gone
-      console.warn('Poll error (will retry):', e);
-    } finally {
-      floatingWindowPollBusy = false;
-    }
-  }, 500);
-}
-
-function stopFloatingWindowPoll() {
-  if (floatingWindowPollInterval) {
-    clearInterval(floatingWindowPollInterval);
-    floatingWindowPollInterval = null;
-  }
-  floatingWindowPollBusy = false;
-}
-
-// Restores floating window when main window regains focus (after being minimized).
-// Only restores if it was open before minimize - respects user closing it manually.
-async function handleWindowFocusChanged(windowId) {
-  if (windowId === currentWindowId) {
+    } catch (e) {} // Window may not exist
+  } else {
+    // Window restored/visible
     if (floatingWindowWasOpen && !floatingWindowId) {
+      // Recreate floating window after minimize
       try {
         await openCompanionPanel();
-        // Only clear flag after successful restore
         floatingWindowWasOpen = false;
       } catch (e) {
-        // Will retry on next focus event
         console.error('Failed to restore floating window:', e);
+      }
+    } else if (floatingWindowId) {
+      // Floating window exists - reposition to bring to current Space
+      try {
+        const currentWindow = await chrome.windows.getCurrent();
+        await chrome.windows.update(floatingWindowId, {
+          left: Math.max(0, currentWindow.left - 200 - 5),
+          top: currentWindow.top,
+          height: currentWindow.height,
+          focused: true
+        });
+        // Return focus to main window
+        await chrome.windows.update(currentWindow.id, { focused: true });
+      } catch (e) {
+        // Floating window gone - recreate it
+        floatingWindowId = null;
+        await openCompanionPanel();
       }
     }
   }
