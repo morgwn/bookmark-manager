@@ -18,12 +18,15 @@ let pendingNoteData = null; // For note modal: {id, title, displayTitle, metadat
 let connectionSvg = null; // SVG overlay for drawing connection lines
 const CLOSED_FOLDER_NAME = '.closed';
 const MAX_CLOSED_TABS = 20;
-const COMPANION_MODE = 'sidepanel'; // 'floating', 'sidepanel', or 'none'
+const COMPANION_MODE = 'floating'; // 'floating', 'sidepanel', or 'none'
+const AUTO_OPEN_FLOATING = true; // Auto-open floating window when GoldenTab loads
 let pendingBookmarkTabs = new Map(); // Track tabs opened from bookmarks: tabId → originalUrl
 let redirectedTabs = new Map(); // Tabs that redirected: tabId → originalUrl
 let floatingWindowId = null; // Track floating window for repositioning
 let mainWindowId = null; // Track main window to follow
 let currentWindowId = null; // This window's ID for per-window workspace storage
+let floatingWindowWasOpen = false; // Track if floating window was open before minimize
+let floatingWindowPollInterval = null; // Poll for minimize state
 
 //------------------------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -118,6 +121,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupModalListeners();
     setupTabListeners();
     setupConnectionLines();
+
+    // Auto-open floating companion window
+    if (COMPANION_MODE === 'floating' && AUTO_OPEN_FLOATING) {
+      openCompanionPanel();
+    }
   } catch (error) {
     console.error('DOMContentLoaded error:', error);
   }
@@ -163,10 +171,18 @@ function setupEventListeners() {
   // Listen for workspace changes from side panel
   chrome.storage.onChanged.addListener(handleStorageChange);
 
+  // Listen for messages from background script
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.action === 'openCompanion' && COMPANION_MODE !== 'none') {
+      openCompanionPanel();
+    }
+  });
+
   // Track floating window position relative to main window (only if using floating mode)
   if (COMPANION_MODE === 'floating') {
     chrome.windows.onBoundsChanged.addListener(handleWindowBoundsChanged);
     chrome.windows.onRemoved.addListener(handleWindowRemoved);
+    chrome.windows.onFocusChanged.addListener(handleWindowFocusChanged);
   }
 
   // Active tabs panel accepts bookmark drops (for "past the end" drops)
@@ -918,6 +934,15 @@ async function openCompanionPanel() {
   }
 }
 
+//------------------------------------------
+// Floating Window Management
+// Creates a companion window that stays attached to the left side of the main window.
+// Handles: positioning, minimize/restore behavior, and cleanup.
+// Uses polling because Chrome lacks a window state change event.
+//------------------------------------------
+
+// Opens a floating companion window positioned to the left of the main window.
+// Passes the main window's ID so the floating window knows which tabs to display.
 async function openFloatingWindow() {
   // Close existing floating window if any
   if (floatingWindowId) {
@@ -939,28 +964,74 @@ async function openFloatingWindow() {
   });
 
   floatingWindowId = floatingWindow.id;
+  startFloatingWindowPoll();
 }
 
+// Keeps floating window attached when main window moves or resizes.
+// Skips repositioning if main window is minimized (avoid moving to weird coordinates).
 async function handleWindowBoundsChanged(window) {
-  // Only respond to main window changes
   if (window.id !== mainWindowId || !floatingWindowId) return;
+  if (window.state === 'minimized') return;
 
   try {
-    // Reposition floating window to stay next to main window (left side)
     await chrome.windows.update(floatingWindowId, {
       left: Math.max(0, window.left - 200 - 5),
       top: window.top,
       height: window.height
     });
   } catch (e) {
-    // Floating window may have been closed
     floatingWindowId = null;
   }
 }
 
+// Cleanup when floating window is closed (manually or programmatically).
 function handleWindowRemoved(windowId) {
   if (windowId === floatingWindowId) {
     floatingWindowId = null;
+    stopFloatingWindowPoll();
+  }
+}
+
+// Polls main window state to detect minimize (Chrome has no onStateChanged event).
+// When minimized: closes floating window and remembers it was open for restore.
+function startFloatingWindowPoll() {
+  if (floatingWindowPollInterval) return;
+
+  floatingWindowPollInterval = setInterval(async () => {
+    if (!floatingWindowId) {
+      stopFloatingWindowPoll();
+      return;
+    }
+
+    try {
+      const win = await chrome.windows.get(currentWindowId);
+      if (win.state === 'minimized') {
+        floatingWindowWasOpen = true;
+        await chrome.windows.remove(floatingWindowId);
+        floatingWindowId = null;
+        stopFloatingWindowPoll();
+      }
+    } catch (e) {
+      stopFloatingWindowPoll();
+    }
+  }, 500);
+}
+
+function stopFloatingWindowPoll() {
+  if (floatingWindowPollInterval) {
+    clearInterval(floatingWindowPollInterval);
+    floatingWindowPollInterval = null;
+  }
+}
+
+// Restores floating window when main window regains focus (after being minimized).
+// Only restores if it was open before minimize - respects user closing it manually.
+async function handleWindowFocusChanged(windowId) {
+  if (windowId === currentWindowId) {
+    if (floatingWindowWasOpen && !floatingWindowId) {
+      openCompanionPanel();
+      floatingWindowWasOpen = false;
+    }
   }
 }
 
