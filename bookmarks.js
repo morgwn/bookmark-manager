@@ -944,15 +944,26 @@ async function openCompanionPanel() {
 // Opens a floating companion window positioned to the left of the main window.
 // Passes the main window's ID so the floating window knows which tabs to display.
 async function openFloatingWindow() {
-  // Close existing floating window if any
+  const currentWindow = await chrome.windows.getCurrent();
+  mainWindowId = currentWindow.id;
+
+  // Check if floating window already exists for this window (survives refresh)
+  const sidepanelUrl = chrome.runtime.getURL(`sidepanel.html?windowId=${currentWindow.id}`);
+  const allWindows = await chrome.windows.getAll({ populate: true });
+  for (const win of allWindows) {
+    if (win.type === 'popup' && win.tabs?.some(t => t.url === sidepanelUrl)) {
+      floatingWindowId = win.id;
+      startFloatingWindowPoll();
+      return; // Already exists, just track it
+    }
+  }
+
+  // Close any stale floating window reference
   if (floatingWindowId) {
     try {
       await chrome.windows.remove(floatingWindowId);
     } catch (e) {} // Window may already be closed
   }
-
-  const currentWindow = await chrome.windows.getCurrent();
-  mainWindowId = currentWindow.id;
 
   const floatingWindow = await chrome.windows.create({
     url: `sidepanel.html?windowId=${currentWindow.id}`,
@@ -1758,20 +1769,6 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     content.appendChild(workspaceIndicator);
   }
 
-  // Note indicator (shown if bookmark has a note)
-  const hasNote = metadata.note;
-  if (hasNote) {
-    const noteIndicator = document.createElement('span');
-    noteIndicator.className = 'note-indicator';
-    noteIndicator.textContent = '📝';
-    noteIndicator.title = hasNote;
-    noteIndicator.onclick = (e) => {
-      e.stopPropagation();
-      showNoteModal(bookmark.id, bookmark.title, displayTitle, metadata);
-    };
-    content.appendChild(noteIndicator);
-  }
-
   // Multi-location indicator (bookmark exists in multiple places)
   if (!bookmark.children && bookmark.url) {
     const normalized = normalizeUrl(bookmark.url);
@@ -1805,6 +1802,26 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
       };
       content.appendChild(multiIndicator);
     }
+  }
+
+  // Inline note preview (shown if bookmark has a note)
+  const hasNote = metadata.note;
+  if (hasNote) {
+    const notePreview = document.createElement('span');
+    notePreview.className = 'note-preview';
+    // Truncate to ~50 chars for inline display
+    const truncated = hasNote.length > 50 ? hasNote.substring(0, 50) + '…' : hasNote;
+    notePreview.textContent = truncated;
+    notePreview.title = hasNote; // Full note on hover
+    notePreview.onclick = (e) => {
+      e.stopPropagation();
+      // Single click - show tooltip (title already does this, but could enhance later)
+    };
+    notePreview.ondblclick = (e) => {
+      e.stopPropagation();
+      showNoteModal(bookmark.id, bookmark.title, displayTitle, metadata);
+    };
+    content.appendChild(notePreview);
   }
 
   // URL display for bookmarks

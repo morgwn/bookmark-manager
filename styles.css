@@ -695,17 +695,27 @@ body {
   margin-bottom: 16px;
 }
 
-/* Note indicator */
-.note-indicator {
+/* Inline note preview */
+.note-preview {
   font-size: 11px;
-  color: #8b8d94;
-  flex-shrink: 0;
+  color: #c0b072;
+  background: #494634;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 8px;
   margin-right: 8px;
+  flex-shrink: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
+  max-width: 200px;
 }
 
-.note-indicator:hover {
-  color: #e4e6eb;
+.note-preview:hover {
+  background: #4a4630;
+  color: #c4b46a;
 }
 
 /* Note button active state */
