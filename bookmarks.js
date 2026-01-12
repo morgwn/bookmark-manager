@@ -351,6 +351,17 @@ function setupConnectionLines() {
   document.body.appendChild(connectionSvg);
 }
 
+// Generate a consistent color from a URL string (same URL = same color)
+function urlToColor(url) {
+  let hash = 0;
+  for (let i = 0; i < url.length; i++) {
+    hash = ((hash << 5) - hash) + url.charCodeAt(i);
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 70%, 55%)`;
+}
+
 function drawConnections(folderId) {
   if (!connectionSvg) return;
   connectionSvg.innerHTML = '';
@@ -388,6 +399,9 @@ function drawConnections(folderId) {
       const titleEl = bookmark.querySelector('.title');
       const titleRect = titleEl ? titleEl.getBoundingClientRect() : rect;
 
+      // Get consistent color for this URL
+      const lineColor = urlToColor(normalizedUrl);
+
       // Draw curved bezier line from just after bookmark title to tab's left edge
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       const startX = Math.min(titleRect.right + 8, maxBookmarkX); // capped at divider
@@ -399,7 +413,7 @@ function drawConnections(folderId) {
       const controlOffset = Math.min(100, Math.abs(endX - startX) / 2);
 
       path.setAttribute('d', `M${startX},${startY} C${startX + controlOffset},${startY} ${endX - controlOffset},${endY} ${endX},${endY}`);
-      path.setAttribute('stroke', '#ff6b35');
+      path.setAttribute('stroke', lineColor);
       path.setAttribute('stroke-width', '2');
       path.setAttribute('fill', 'none');
       path.setAttribute('opacity', '0.6');
@@ -411,7 +425,7 @@ function drawConnections(folderId) {
         circle.setAttribute('cx', point.x);
         circle.setAttribute('cy', point.y);
         circle.setAttribute('r', '4');
-        circle.setAttribute('fill', '#ff6b35');
+        circle.setAttribute('fill', lineColor);
         connectionSvg.appendChild(circle);
       });
     }
@@ -448,6 +462,9 @@ function drawConnectionsFromTab(tabUrl) {
     return bookmarkUrl && normalizeUrl(bookmarkUrl) === normalizedTabUrl;
   });
 
+  // Get consistent color for this URL
+  const lineColor = urlToColor(normalizedTabUrl);
+
   // Draw lines between every tab and every bookmark
   matchingTabs.forEach(tabEl => {
     const tabRect = tabEl.getBoundingClientRect();
@@ -467,7 +484,7 @@ function drawConnectionsFromTab(tabUrl) {
       const controlOffset = Math.min(100, Math.abs(endX - startX) / 2);
 
       path.setAttribute('d', `M${startX},${startY} C${startX - controlOffset},${startY} ${endX + controlOffset},${endY} ${endX},${endY}`);
-      path.setAttribute('stroke', '#ff6b35');
+      path.setAttribute('stroke', lineColor);
       path.setAttribute('stroke-width', '2');
       path.setAttribute('fill', 'none');
       path.setAttribute('opacity', '0.6');
@@ -479,7 +496,7 @@ function drawConnectionsFromTab(tabUrl) {
         circle.setAttribute('cx', point.x);
         circle.setAttribute('cy', point.y);
         circle.setAttribute('r', '4');
-        circle.setAttribute('fill', '#ff6b35');
+        circle.setAttribute('fill', lineColor);
         connectionSvg.appendChild(circle);
       });
     });
