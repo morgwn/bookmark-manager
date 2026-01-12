@@ -441,6 +441,19 @@ body {
   margin-right: 12px;
 }
 
+/* Inline rename input */
+.inline-rename {
+  font-size: 13px;
+  font-weight: 400;
+  color: #e4e6eb;
+  background: #2d3139;
+  border: 1px solid #5865f2;
+  border-radius: 3px;
+  padding: 2px 6px;
+  outline: none;
+  margin-right: 12px;
+}
+
 /* Star indicator (shown next to title when starred) */
 .star-indicator {
   font-size: 12px;

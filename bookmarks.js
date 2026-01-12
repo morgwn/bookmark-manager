@@ -83,6 +83,65 @@ async function applyCurrentFilters() {
   }
 }
 
+// Create a new subfolder inside the given folder
+async function createSubfolder(parentId) {
+  const newFolder = await chrome.bookmarks.create({
+    parentId: parentId,
+    title: 'New Folder'
+  });
+
+  // Expand parent folder to show new folder
+  collapsedFolders.delete(parentId);
+  await applyCurrentFilters();
+
+  // Find the new folder element and start inline rename
+  setTimeout(() => {
+    const el = document.querySelector(`.bookmark-folder[data-id="${newFolder.id}"] .title`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      startInlineRename(el, newFolder.id, 'New Folder', 'New Folder', { _flags: [] });
+    }
+  }, 100);
+}
+
+// Inline rename - converts title span to input for editing
+function startInlineRename(titleSpan, bookmarkId, fullTitle, displayTitle, metadata) {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'inline-rename';
+  input.value = displayTitle;
+  input.style.width = `${Math.max(titleSpan.offsetWidth, 100)}px`;
+
+  const saveRename = async () => {
+    const newDisplayTitle = input.value.trim();
+    if (newDisplayTitle && newDisplayTitle !== displayTitle) {
+      // Preserve metadata flags when renaming
+      const newTitle = FilterSystem.buildTitle(newDisplayTitle, metadata);
+      await chrome.bookmarks.update(bookmarkId, { title: newTitle });
+      applyCurrentFilters();
+    } else {
+      // Cancelled or no change - restore original
+      input.replaceWith(titleSpan);
+    }
+  };
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      input.replaceWith(titleSpan);
+    }
+  });
+
+  input.addEventListener('blur', saveRename);
+
+  titleSpan.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
 async function toggleStarred(bookmarkId, currentTitle) {
   const parsed = FilterSystem.parseTitle(currentTitle);
   parsed.metadata.starred = !parsed.metadata.starred;
@@ -1885,6 +1944,30 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
   title.className = 'title';
   title.textContent = displayTitle;
 
+  // Slow double-click to rename (click, pause 400ms+, click - like Finder)
+  let lastClickTime = 0;
+  let pendingRename = false;
+  title.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const now = Date.now();
+    const timeSinceLastClick = now - lastClickTime;
+
+    if (pendingRename && timeSinceLastClick >= 400 && timeSinceLastClick <= 1500) {
+      // Slow second click - trigger rename
+      pendingRename = false;
+      startInlineRename(title, bookmark.id, bookmark.title, displayTitle, metadata);
+    } else {
+      // First click or too fast - start waiting
+      pendingRename = true;
+      lastClickTime = now;
+      setTimeout(() => { pendingRename = false; }, 1500);
+    }
+  });
+  // Fast double-click resets rename state, bubbles to parent
+  title.addEventListener('dblclick', () => {
+    pendingRename = false;
+  });
+
   content.appendChild(icon);
   content.appendChild(title);
 
@@ -2020,6 +2103,16 @@ function createBookmarkElement(bookmark, level, isCollapsed, shouldHide) {
     actions.appendChild(openBtn);
   } else {
     // Folder actions
+
+    // Create subfolder button
+    const createBtn = document.createElement('button');
+    createBtn.textContent = '+';
+    createBtn.title = 'Create subfolder';
+    createBtn.onclick = async (e) => {
+      e.stopPropagation();
+      await createSubfolder(bookmark.id);
+    };
+    actions.appendChild(createBtn);
 
     // Note button
     const noteBtn = document.createElement('button');
