@@ -26,6 +26,7 @@ let floatingWindowId = null; // Track floating window for repositioning
 let mainWindowId = null; // Track main window to follow
 let currentWindowId = null; // This window's ID for per-window workspace storage
 let floatingWindowWasOpen = false; // Track if floating window was open before minimize
+let floatingWindowCreatedAt = 0; // Debounce: don't close immediately after creating
 
 //------------------------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -1115,6 +1116,7 @@ async function openFloatingWindow() {
   });
 
   floatingWindowId = floatingWindow.id;
+  floatingWindowCreatedAt = Date.now();
 
   // Return focus to main window
   await chrome.windows.update(currentWindow.id, { focused: true });
@@ -1153,22 +1155,24 @@ async function handleWindowRemoved(windowId) {
 }
 
 // Handle minimize/restore via document visibility.
-// When hidden: close floating window immediately.
-// When visible: recreate floating window if it was open.
+// Only close floating window on actual minimize (not Space switch/Mission Control).
 async function handleVisibilityChange() {
   if (document.hidden) {
-    // Close floating window immediately for responsiveness
-    if (floatingWindowId) {
-      floatingWindowWasOpen = true;
-      const windowToRemove = floatingWindowId;
-      floatingWindowId = null;
-      try {
+    // Check if actually minimized before closing
+    await new Promise(r => setTimeout(r, 100));
+    try {
+      const win = await chrome.windows.get(mainWindowId);
+      if (win.state === 'minimized' && floatingWindowId) {
+        floatingWindowWasOpen = true;
+        const windowToRemove = floatingWindowId;
+        floatingWindowId = null;
         await chrome.windows.remove(windowToRemove);
-      } catch (e) {} // May already be closed
-    }
+      }
+    } catch (e) {}
   } else {
-    // Window restored/visible - recreate floating window if it was open
+    // Window restored/visible
     if (floatingWindowWasOpen && !floatingWindowId) {
+      await new Promise(r => setTimeout(r, 100));
       try {
         await openCompanionPanel();
         floatingWindowWasOpen = false;
