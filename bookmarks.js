@@ -402,6 +402,26 @@ function drawConnections(folderId) {
       // Get consistent color for this URL
       const lineColor = urlToColor(normalizedUrl);
 
+      // Draw highlight rects behind matched rows (narrower, ending at line start)
+      const bookmarkHighlight = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      const bookmarkEndX = Math.min(titleRect.right + 8, maxBookmarkX);
+      bookmarkHighlight.setAttribute('x', rect.left);
+      bookmarkHighlight.setAttribute('y', rect.top);
+      bookmarkHighlight.setAttribute('width', bookmarkEndX - rect.left);
+      bookmarkHighlight.setAttribute('height', rect.height);
+      bookmarkHighlight.setAttribute('fill', lineColor);
+      bookmarkHighlight.setAttribute('opacity', '0.15');
+      connectionSvg.appendChild(bookmarkHighlight);
+
+      const tabHighlight = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      tabHighlight.setAttribute('x', to.left);
+      tabHighlight.setAttribute('y', to.top);
+      tabHighlight.setAttribute('width', to.width);
+      tabHighlight.setAttribute('height', to.height);
+      tabHighlight.setAttribute('fill', lineColor);
+      tabHighlight.setAttribute('opacity', '0.15');
+      connectionSvg.appendChild(tabHighlight);
+
       // Draw curved bezier line from just after bookmark title to tab's left edge
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       const startX = Math.min(titleRect.right + 8, maxBookmarkX); // capped at divider
@@ -464,6 +484,34 @@ function drawConnectionsFromTab(tabUrl) {
 
   // Get consistent color for this URL
   const lineColor = urlToColor(normalizedTabUrl);
+
+  // Draw highlight rects behind all matched rows first
+  matchingTabs.forEach(tabEl => {
+    const r = tabEl.getBoundingClientRect();
+    const highlight = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    highlight.setAttribute('x', r.left);
+    highlight.setAttribute('y', r.top);
+    highlight.setAttribute('width', r.width);
+    highlight.setAttribute('height', r.height);
+    highlight.setAttribute('fill', lineColor);
+    highlight.setAttribute('opacity', '0.15');
+    connectionSvg.appendChild(highlight);
+  });
+
+  matchingBookmarks.forEach(bookmark => {
+    const r = bookmark.getBoundingClientRect();
+    const titleEl = bookmark.querySelector('.title');
+    const titleRect = titleEl ? titleEl.getBoundingClientRect() : r;
+    const endX = Math.min(titleRect.right + 8, maxBookmarkX);
+    const highlight = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    highlight.setAttribute('x', r.left);
+    highlight.setAttribute('y', r.top);
+    highlight.setAttribute('width', endX - r.left);
+    highlight.setAttribute('height', r.height);
+    highlight.setAttribute('fill', lineColor);
+    highlight.setAttribute('opacity', '0.15');
+    connectionSvg.appendChild(highlight);
+  });
 
   // Draw lines between every tab and every bookmark
   matchingTabs.forEach(tabEl => {
