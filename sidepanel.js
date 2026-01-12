@@ -170,6 +170,21 @@ async function saveActiveTabForWorkspace() {
   }
 }
 
+// Normalize URLs for comparison (strips protocol, www, trailing slash, hash)
+function normalizeUrl(url) {
+  if (!url) return '';
+  try {
+    let normalized = url.toLowerCase();
+    normalized = normalized.replace(/^https?:\/\//, '');
+    normalized = normalized.replace(/^www\./, '');
+    normalized = normalized.replace(/\/$/, '');
+    normalized = normalized.split('#')[0];
+    return normalized;
+  } catch (e) {
+    return url;
+  }
+}
+
 async function restoreActiveTabForWorkspace(workspaceId) {
   if (!workspaceId) return;
 
@@ -179,23 +194,38 @@ async function restoreActiveTabForWorkspace(workspaceId) {
 
   if (!savedUrl) return;
 
-  // Retry up to 10 times over 2 seconds
-  const maxRetries = 10;
+  const normalizedSavedUrl = normalizeUrl(savedUrl);
+
+  // Retry up to 15 times over 3 seconds (tabs may still be loading)
+  const maxRetries = 15;
   const retryDelay = 200;
 
   for (let i = 0; i < maxRetries; i++) {
     const tabs = await chrome.tabs.query({ windowId: targetWindowId });
-    const matchingTab = tabs.find(t => t.url === savedUrl);
+    // Look for tab with matching URL that has finished loading
+    const matchingTab = tabs.find(t =>
+      t.url &&
+      t.status === 'complete' &&
+      normalizeUrl(t.url) === normalizedSavedUrl
+    );
 
     if (matchingTab) {
       await chrome.tabs.update(matchingTab.id, { active: true });
-      return; // Success
+      return;
     }
 
-    // Wait before retry
+    // Also check loading tabs in case they already have the URL assigned
+    const loadingMatch = tabs.find(t =>
+      t.url && normalizeUrl(t.url) === normalizedSavedUrl
+    );
+    if (loadingMatch && i >= 5) {
+      // After 1 second, accept loading tabs too
+      await chrome.tabs.update(loadingMatch.id, { active: true });
+      return;
+    }
+
     await new Promise(resolve => setTimeout(resolve, retryDelay));
   }
-  // Gave up - tab not found after retries (graceful fail, no error)
 }
 
 //------------------------------------------

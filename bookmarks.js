@@ -27,6 +27,7 @@ let mainWindowId = null; // Track main window to follow
 let currentWindowId = null; // This window's ID for per-window workspace storage
 let floatingWindowWasOpen = false; // Track if floating window was open before minimize
 let floatingWindowPollInterval = null; // Poll for minimize state
+let floatingWindowPollBusy = false; // Prevent concurrent poll executions
 
 //------------------------------------------------------------
 // Filter Integration (uses FilterSystem from filters.js)
@@ -564,13 +565,13 @@ function setupTabListeners() {
       clearTimeout(reloadTimeout);
     }
 
-    // Schedule new reload for 300ms from now
+    // Schedule new reload for 100ms from now
     reloadTimeout = setTimeout(async () => {
       await loadOpenTabs();
       applyCurrentFilters();
       renderActiveTabs();
       reloadTimeout = null;
-    }, 300);
+    }, 100);
   };
 
   // Tab events
@@ -942,6 +943,9 @@ function closeLooseTabsModal(choice) {
 }
 
 async function activateWorkspace(workspaceId) {
+  // Save current active tab before leaving current workspace
+  await saveActiveTabForWorkspace();
+
   const success = await WorkspaceManager.activate(workspaceId, {
     onLooseTabsPrompt: (tabCount) => showLooseTabsModal(tabCount),
     onComplete: async () => {
@@ -952,12 +956,72 @@ async function activateWorkspace(workspaceId) {
       await loadOpenTabs();
       await loadBookmarks();
       renderActiveTabs();
+      // Restore previously active tab for this workspace
+      await restoreActiveTabForWorkspace(workspaceId);
     },
     onError: (error) => {
       alert('Error activating workspace: ' + error.message);
     }
   });
   return success;
+}
+
+// Save the current active tab for the current workspace (so we can restore it later)
+async function saveActiveTabForWorkspace() {
+  if (!activeWorkspaceFolder) return;
+
+  const [activeTab] = await chrome.tabs.query({ windowId: currentWindowId, active: true });
+
+  if (activeTab && activeTab.url) {
+    const result = await chrome.storage.local.get('workspaceActiveTabs');
+    const workspaceActiveTabs = result.workspaceActiveTabs || {};
+    workspaceActiveTabs[activeWorkspaceFolder.id] = activeTab.url;
+    await chrome.storage.local.set({ workspaceActiveTabs });
+  }
+}
+
+// Restore the active tab that was open when user last left this workspace
+async function restoreActiveTabForWorkspace(workspaceId) {
+  if (!workspaceId) return;
+
+  const result = await chrome.storage.local.get('workspaceActiveTabs');
+  const workspaceActiveTabs = result.workspaceActiveTabs || {};
+  const savedUrl = workspaceActiveTabs[workspaceId];
+
+  if (!savedUrl) return;
+
+  const normalizedSavedUrl = normalizeUrl(savedUrl);
+
+  // Retry up to 15 times over 3 seconds (tabs may still be loading)
+  const maxRetries = 15;
+  const retryDelay = 200;
+
+  for (let i = 0; i < maxRetries; i++) {
+    const tabs = await chrome.tabs.query({ windowId: currentWindowId });
+    // Look for tab with matching URL that has finished loading
+    const matchingTab = tabs.find(t =>
+      t.url &&
+      t.status === 'complete' &&
+      normalizeUrl(t.url) === normalizedSavedUrl
+    );
+
+    if (matchingTab) {
+      await chrome.tabs.update(matchingTab.id, { active: true });
+      return;
+    }
+
+    // Also check loading tabs in case they already have the URL assigned
+    const loadingMatch = tabs.find(t =>
+      t.url && normalizeUrl(t.url) === normalizedSavedUrl
+    );
+    if (loadingMatch && i >= 5) {
+      // After 1 second, accept loading tabs too
+      await chrome.tabs.update(loadingMatch.id, { active: true });
+      return;
+    }
+
+    await new Promise(resolve => setTimeout(resolve, retryDelay));
+  }
 }
 
 async function deactivateWorkspace() {
@@ -1013,13 +1077,17 @@ async function openFloatingWindow() {
   mainWindowId = currentWindow.id;
 
   // Check if floating window already exists for this window (survives refresh)
-  const sidepanelUrl = chrome.runtime.getURL(`sidepanel.html?windowId=${currentWindow.id}`);
-  const allWindows = await chrome.windows.getAll({ populate: true });
-  for (const win of allWindows) {
-    if (win.type === 'popup' && win.tabs?.some(t => t.url === sidepanelUrl)) {
-      floatingWindowId = win.id;
-      startFloatingWindowPoll();
-      return; // Already exists, just track it
+  // Skip this check when restoring after minimize - we just removed it and it may
+  // still be in the window list briefly, causing a race condition
+  if (!floatingWindowWasOpen) {
+    const sidepanelUrl = chrome.runtime.getURL(`sidepanel.html?windowId=${currentWindow.id}`);
+    const allWindows = await chrome.windows.getAll({ populate: true });
+    for (const win of allWindows) {
+      if (win.type === 'popup' && win.tabs?.some(t => t.url === sidepanelUrl)) {
+        floatingWindowId = win.id;
+        startFloatingWindowPoll();
+        return; // Already exists, just track it
+      }
     }
   }
 
@@ -1056,7 +1124,9 @@ async function handleWindowBoundsChanged(window) {
       height: window.height
     });
   } catch (e) {
+    // Floating window is gone - clean up fully
     floatingWindowId = null;
+    stopFloatingWindowPoll();
   }
 }
 
@@ -1074,21 +1144,31 @@ function startFloatingWindowPoll() {
   if (floatingWindowPollInterval) return;
 
   floatingWindowPollInterval = setInterval(async () => {
-    if (!floatingWindowId) {
-      stopFloatingWindowPoll();
-      return;
-    }
+    // Prevent concurrent executions (async callback can overlap with next interval)
+    if (floatingWindowPollBusy) return;
+    floatingWindowPollBusy = true;
 
     try {
+      if (!floatingWindowId) {
+        stopFloatingWindowPoll();
+        return;
+      }
+
       const win = await chrome.windows.get(currentWindowId);
       if (win.state === 'minimized') {
         floatingWindowWasOpen = true;
-        await chrome.windows.remove(floatingWindowId);
-        floatingWindowId = null;
+        // Stop poll and clear ID BEFORE async remove to avoid race with focus event
         stopFloatingWindowPoll();
+        const windowToRemove = floatingWindowId;
+        floatingWindowId = null;
+        await chrome.windows.remove(windowToRemove);
       }
     } catch (e) {
-      stopFloatingWindowPoll();
+      // Transient error - just log, don't kill everything
+      // handleWindowRemoved will clean up if window is actually gone
+      console.warn('Poll error (will retry):', e);
+    } finally {
+      floatingWindowPollBusy = false;
     }
   }, 500);
 }
@@ -1098,6 +1178,7 @@ function stopFloatingWindowPoll() {
     clearInterval(floatingWindowPollInterval);
     floatingWindowPollInterval = null;
   }
+  floatingWindowPollBusy = false;
 }
 
 // Restores floating window when main window regains focus (after being minimized).
@@ -1105,8 +1186,14 @@ function stopFloatingWindowPoll() {
 async function handleWindowFocusChanged(windowId) {
   if (windowId === currentWindowId) {
     if (floatingWindowWasOpen && !floatingWindowId) {
-      openCompanionPanel();
-      floatingWindowWasOpen = false;
+      try {
+        await openCompanionPanel();
+        // Only clear flag after successful restore
+        floatingWindowWasOpen = false;
+      } catch (e) {
+        // Will retry on next focus event
+        console.error('Failed to restore floating window:', e);
+      }
     }
   }
 }

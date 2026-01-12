@@ -180,29 +180,29 @@ const WorkspaceManager = {
   async saveCurrentTabs(workspaceId) {
     const sessionFolderId = await this.getOrCreateSessionFolder(workspaceId);
 
+    // Clear existing session bookmarks (parallel)
     const existing = await chrome.bookmarks.getChildren(sessionFolderId);
-    for (const bookmark of existing) {
-      await chrome.bookmarks.remove(bookmark.id);
-    }
+    await Promise.all(existing.map(b => chrome.bookmarks.remove(b.id)));
 
+    // Save current tabs as bookmarks (parallel)
     const tabs = await this.getCurrentWindowTabs();
-
-    for (const tab of tabs) {
-      await chrome.bookmarks.create({
+    await Promise.all(tabs.map(tab =>
+      chrome.bookmarks.create({
         parentId: sessionFolderId,
         title: tab.title || tab.url,
         url: tab.url
-      });
-    }
+      })
+    ));
 
     return tabs.length;
   },
 
   async restoreTabs(workspaceId) {
     const tabs = await this.getSessionTabs(workspaceId);
-    for (const tab of tabs) {
-      await chrome.tabs.create({ url: tab.url, active: false });
-    }
+    // Open all tabs in parallel
+    await Promise.all(tabs.map(tab =>
+      chrome.tabs.create({ url: tab.url, active: false })
+    ));
     return tabs.length;
   },
 
