@@ -1153,48 +1153,27 @@ async function handleWindowRemoved(windowId) {
 }
 
 // Handle minimize/restore via document visibility.
-// Only close floating window if main window is actually minimized (not just Space switch).
-// When restored: recreate floating window, or reposition existing one to current Space.
+// When hidden: close floating window immediately.
+// When visible: recreate floating window if it was open.
 async function handleVisibilityChange() {
   if (document.hidden) {
-    // Check if actually minimized (not just Space switch)
-    try {
-      const win = await chrome.windows.get(mainWindowId);
-      if (win.state === 'minimized' && floatingWindowId) {
-        floatingWindowWasOpen = true;
-        const windowToRemove = floatingWindowId;
-        floatingWindowId = null;
-        try {
-          await chrome.windows.remove(windowToRemove);
-        } catch (e) {} // May already be closed
-      }
-    } catch (e) {} // Window may not exist
+    // Close floating window immediately for responsiveness
+    if (floatingWindowId) {
+      floatingWindowWasOpen = true;
+      const windowToRemove = floatingWindowId;
+      floatingWindowId = null;
+      try {
+        await chrome.windows.remove(windowToRemove);
+      } catch (e) {} // May already be closed
+    }
   } else {
-    // Window restored/visible
+    // Window restored/visible - recreate floating window if it was open
     if (floatingWindowWasOpen && !floatingWindowId) {
-      // Recreate floating window after minimize
       try {
         await openCompanionPanel();
         floatingWindowWasOpen = false;
       } catch (e) {
         console.error('Failed to restore floating window:', e);
-      }
-    } else if (floatingWindowId) {
-      // Floating window exists - reposition to bring to current Space
-      try {
-        const currentWindow = await chrome.windows.getCurrent();
-        await chrome.windows.update(floatingWindowId, {
-          left: Math.max(0, currentWindow.left - 200 - 5),
-          top: currentWindow.top,
-          height: currentWindow.height,
-          focused: true
-        });
-        // Return focus to main window
-        await chrome.windows.update(currentWindow.id, { focused: true });
-      } catch (e) {
-        // Floating window gone - recreate it
-        floatingWindowId = null;
-        await openCompanionPanel();
       }
     }
   }
